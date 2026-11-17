@@ -88,5 +88,6 @@ private:
     int m_lastToolPercent = 0;
     bool m_finishing = false;
     int m_avdAttempt = 0;
+    QStringList m_outputHead;
     QStringList m_outputTail;
 };

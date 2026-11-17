@@ -634,6 +634,7 @@ void RuntimeInstaller::runToolBatch(const QString &batch, const QStringList &arg
 #endif
     m_process.setWorkingDirectory(m_sdkRoot);
     m_process.setProcessEnvironment(toolEnvironment());
+    emit logReceived("Running: " + m_process.program() + " " + m_process.nativeArguments());
     m_process.start();
     if (!m_process.waitForStarted(10000)) {
         fail(description + ": " + m_process.errorString());
@@ -655,6 +656,7 @@ void RuntimeInstaller::handleOutput(const QByteArray &bytes)
         // sdkmanager redraws progress with carriage returns, so keep a bounded
         // tail of real output to quote when a stage fails.
         if (!trimmed.startsWith("[") && !trimmed.startsWith("  progress")) {
+            if (m_outputHead.size() < 8) m_outputHead.append(trimmed);
             m_outputTail.append(trimmed);
             while (m_outputTail.size() > 12) m_outputTail.removeFirst();
         }
@@ -754,7 +756,9 @@ void RuntimeInstaller::fail(const QString &reason)
     // example sdkmanager's own message), so surface them with the failure.
     for (const QString &line : m_outputTail) emit logReceived("  last output: " + line);
     QString detail = reason;
+    if (!m_outputHead.isEmpty()) detail += "\n\nFirst tool output:\n" + m_outputHead.join('\n');
     if (!m_outputTail.isEmpty()) detail += "\n\nLast tool output:\n" + m_outputTail.join('\n');
+    m_outputHead.clear();
     m_outputTail.clear();
     emit finished(false, detail);
 }

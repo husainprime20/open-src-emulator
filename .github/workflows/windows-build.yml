@@ -263,6 +263,23 @@ jobs:
           $sizeMb = [math]::Round(((Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
           Write-Output "Provisioned runtime: $sizeMb MB under $root"
 
+      - name: Probe avdmanager directly
+        if: always()
+        shell: pwsh
+        run: |
+          # Control experiment: run the same tool the same way and print the FULL
+          # first lines, so a rejected option is identifiable rather than hidden
+          # behind the usage text.
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_HOME = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:JAVA_HOME = "$root\sdk\openjdk"
+          $avdmanager = "$root\sdk\cmdline-tools\latest\bin\avdmanager.bat"
+          & $avdmanager create avd --force '--name=ProbeDevice' '--package=system-images;android-35;google_apis;x86_64' 2>&1 | Select-Object -First 15
+          Write-Output "probe exit: $LASTEXITCODE"
+          if (Test-Path "$root\avd\ProbeDevice.ini") { Write-Output 'probe: AVD created without --device' }
+
       - name: Boot the Android device headlessly
         shell: pwsh
         run: |

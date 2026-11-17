@@ -35,8 +35,8 @@ Install Android runtime  (Android instance page)
   │      (answers "y", only after the UI licence checkbox was accepted)
   ├─ 4  cmd.exe /d /s /c sdkmanager.bat --install emulator platform-tools
   │      "system-images;android-35;google_apis;x86_64"
-  ├─ 5  cmd.exe /d /s /c avdmanager.bat create avd --name OpenSrc_Default_API_35
-  │      --package … --device pixel_2   into sdk\..\avd
+  ├─ 5  cmd.exe /d /s /c avdmanager.bat create avd --name=OpenSrc_Default_API_35
+  │      --package … --device-file …   into sdk\..\avd
   └─ 6  ready: emulator.exe + AVD config both present
 ```
 

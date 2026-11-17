@@ -1,6 +1,8 @@
 build/
 out/
 dist/
+package/
+artifacts/
 node_modules/
 .vs/
 CMakeFiles/

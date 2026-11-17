@@ -22,6 +22,10 @@ cmake --build build --config Release
 
 Use `windeployqt` on `build/Release/OpenSrc.exe` (and ship/install a compatible QEMU build separately) when packaging. The selected QEMU executable and Android image paths are configured in **Android instance** inside the app.
 
+## Download Windows builds from GitHub Actions
+
+`.github/workflows/windows-build.yml` builds the x64 app, deploys the Qt runtime, packages a portable ZIP, and compiles an Inno Setup installer on pushes, pull requests, and manual runs. Open the workflow run in the repository’s **Actions** tab and download **OpenSrc-Windows-Portable-x64** or **OpenSrc-Windows-Installer-x64** from its Artifacts section. Artifacts are retained for 30 days. Pushing a version tag such as `v0.2.0` also publishes both packages as assets on a GitHub Release. The installer includes OpenSrc and Qt runtime files; it does **not** bundle QEMU or Android images.
+
 Windows Hypervisor Platform must be enabled in Windows Features for WHPX. TCG is an available fallback, but is much slower. Network is opt-in and uses QEMU user-mode NAT. Android system images are not bundled.
 
 ## What works in this first native build

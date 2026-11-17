@@ -299,23 +299,35 @@ jobs:
           $emulator = "$root\sdk\emulator\emulator.exe"
           $adb = "$root\sdk\platform-tools\adb.exe"
 
-          # Report acceleration state: the x86_64 emulator needs WHPX/Hyper-V on
-          # Windows and hosted runners may not provide it. Publish it as its own
-          # annotation so it stays readable even when the boot step fails.
-          & $emulator -accel-check 2>&1 | ForEach-Object {
-            Write-Output "accel-check: $_"
-            $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::warning title=Acceleration check::$m"
+          function Annotate([string]$level, [string]$title, [string]$line) {
+            $m = ([string]$line).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::$level title=$title::$m"
           }
 
-          $args = @('-avd','OpenSrc_Default_API_35','-no-window','-no-audio','-no-snapshot',
-                    '-no-boot-anim','-gpu','swiftshader_indirect','-no-metrics')
-          Write-Output "Launching: $emulator $($args -join ' ')"
-          $proc = Start-Process -FilePath $emulator -ArgumentList $args `
-            -PassThru -RedirectStandardOutput emulator.out.log -RedirectStandardError emulator.err.log
-          try {
-            $booted = $false
-            for ($i = 0; $i -lt 60; $i++) {
+          # Hosted runners report WHPX as "installed and usable" but cannot create
+          # a hypervisor partition (nested virtualization), so the guest never
+          # starts. Record the state, then fall back to software emulation.
+          & $emulator -accel-check 2>&1 | ForEach-Object {
+            Write-Output "accel-check: $_"
+            Annotate 'warning' 'Acceleration check' $_
+          }
+          & systeminfo 2>&1 | Select-String -Pattern 'Hyper-V|Virtualization' | ForEach-Object {
+            Write-Output "systeminfo: $_"
+            Annotate 'warning' 'Virtualization support' $_
+          }
+
+          $accelModes = @('off')
+          $booted = $false
+          $proc = $null
+          foreach ($accel in $accelModes) {
+            Write-Output "=== attempting boot with -accel $accel ==="
+            $emulatorArgs = @('-avd','OpenSrc_Default_API_35','-no-window','-no-audio',
+                              '-no-snapshot','-no-boot-anim','-no-metrics','-gpu','swiftshader_indirect',
+                              '-accel',$accel)
+            $proc = Start-Process -FilePath $emulator -ArgumentList $emulatorArgs `
+              -PassThru -RedirectStandardOutput emulator.out.log -RedirectStandardError emulator.err.log
+            # Software emulation boots far more slowly than hardware acceleration.
+            for ($i = 0; $i -lt 150; $i++) {
               Start-Sleep -Seconds 10
               if ($proc.HasExited) { break }
               $state = & $adb get-state 2>$null
@@ -324,16 +336,21 @@ jobs:
                 if ($done -and $done.Trim() -eq '1') { $booted = $true; break }
               }
             }
+            if ($booted) { break }
+            Write-Output "boot attempt with -accel $accel did not reach sys.boot_completed=1"
+            if (-not $proc.HasExited) {
+              & $adb emu kill 2>$null
+              Start-Sleep -Seconds 3
+              if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            }
+          }
+          try {
             if (-not $booted) {
               # One annotation per log line: the check-run summary keeps only the
-              # head and tail, which previously hid the actual error message, but
-              # every annotation message survives intact.
+              # head and tail, so each line is published separately here.
               $lines = @(Get-Content emulator.err.log -ErrorAction SilentlyContinue)
               Write-Output "emulator.err.log had $($lines.Count) line(s)"
-              $lines | Select-Object -First 120 | ForEach-Object {
-                $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Output "::error title=Emulator log::$m"
-              }
+              $lines | Select-Object -First 120 | ForEach-Object { Annotate 'error' 'Emulator log' $_ }
               throw 'The provisioned Android device did not boot'
             }
             $release = & $adb shell getprop ro.build.version.release
@@ -343,7 +360,7 @@ jobs:
           finally {
             & $adb emu kill 2>$null
             Start-Sleep -Seconds 3
-            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
 
       - name: Upload provisioning logs

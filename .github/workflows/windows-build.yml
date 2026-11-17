@@ -169,6 +169,148 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  provision-runtime:
+    name: Provision real Android runtime (Windows)
+    runs-on: windows-2022
+    # This downloads roughly 3 GB of upstream components, so it runs on demand,
+    # on tags, and on pull requests. It exercises the production provisioning
+    # code path end to end instead of assuming it works.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build setup harness
+        shell: pwsh
+        run: |
+          & cmake --build build --config Release --target OpenSrcRuntimeSetup --parallel 2>&1 | Tee-Object -FilePath harness-build.log
+          if ($LASTEXITCODE -ne 0) { throw "Harness build failed" }
+
+      - name: Deploy harness Qt DLLs
+        shell: pwsh
+        run: |
+          $exe = 'build/Release/OpenSrcRuntimeSetup.exe'
+          if (-not (Test-Path $exe)) { throw "Harness executable missing at $exe" }
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --no-translations --no-opengl-sw --no-system-d3d-compiler --dir build/Release $exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+
+      - name: "Provision the runtime into the C-drive install layout"
+        shell: pwsh
+        run: |
+          # Install into the same layout a real install uses, so this also proves
+          # the folder/paths work on the system drive.
+          $root = 'C:\OpenSrc\Runtime'
+          $exe = (Resolve-Path 'build/Release/OpenSrcRuntimeSetup.exe').Path
+          & $exe --root $root --twice 2>&1 | Tee-Object -FilePath provision.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Get-Content provision.log -Tail 60 | ForEach-Object {
+              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Android runtime provisioning::$m"
+            }
+            throw "Provisioning failed with exit code $code"
+          }
+
+      - name: Assert resume did not re-download
+        shell: pwsh
+        run: |
+          $log = Get-Content provision.log -Raw
+          if ($log -notmatch 'SECOND PASS') { throw 'Resume pass did not run' }
+          if ($log -notmatch 'RESULT: ready \(resume verified\)') { throw 'Resume pass did not report ready' }
+          Write-Output 'Second setup pass completed on the existing runtime'
+
+      - name: Assert the provisioned runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'C:\OpenSrc\Runtime'
+          $expected = @(
+            'sdk\cmdline-tools\latest\bin\sdkmanager.bat',
+            'sdk\cmdline-tools\latest\bin\avdmanager.bat',
+            'sdk\emulator\emulator.exe',
+            'sdk\platform-tools\adb.exe',
+            'sdk\openjdk\bin\java.exe',
+            'sdk\licenses',
+            'avd\OpenSrc_Default_API_35.ini',
+            'avd\OpenSrc_Default_API_35.avd\config.ini'
+          )
+          foreach ($relative in $expected) {
+            $path = Join-Path $root $relative
+            if (-not (Test-Path $path)) { throw "Missing provisioned item: $path" }
+          }
+          $image = Get-ChildItem (Join-Path $root 'sdk\system-images\android-35\google_apis\x86_64') -Filter 'system.img' -ErrorAction SilentlyContinue
+          if (-not $image) { throw 'Android system image was not installed' }
+          $sizeMb = [math]::Round(((Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
+          Write-Output "Provisioned runtime: $sizeMb MB under $root"
+
+      - name: Boot the Android device headlessly
+        shell: pwsh
+        run: |
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_HOME = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:ANDROID_USER_HOME = "$root\android-user"
+          $emulator = "$root\sdk\emulator\emulator.exe"
+          $adb = "$root\sdk\platform-tools\adb.exe"
+
+          $proc = Start-Process -FilePath $emulator `
+            -ArgumentList '-avd','OpenSrc_Default_API_35','-no-window','-no-audio','-no-snapshot','-no-boot-anim','-gpu','swiftshader_indirect' `
+            -PassThru -RedirectStandardOutput emulator.out.log -RedirectStandardError emulator.err.log
+          try {
+            $booted = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 10
+              if ($proc.HasExited) { break }
+              $state = & $adb get-state 2>$null
+              if ($state -eq 'device') {
+                $done = & $adb shell getprop sys.boot_completed 2>$null
+                if ($done -and $done.Trim() -eq '1') { $booted = $true; break }
+              }
+            }
+            if (-not $booted) {
+              Get-Content emulator.err.log -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object {
+                $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Output "::error title=Emulator boot::$m"
+              }
+              throw 'The provisioned Android device did not boot'
+            }
+            $release = & $adb shell getprop ro.build.version.release
+            $sdkLevel = & $adb shell getprop ro.build.version.sdk
+            Write-Output "Android guest booted: release=$($release.Trim()) api=$($sdkLevel.Trim())"
+          }
+          finally {
+            & $adb emu kill 2>$null
+            Start-Sleep -Seconds 3
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+      - name: Upload provisioning logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSrc-runtime-provisioning
+          path: |
+            provision.log
+            emulator.out.log
+            emulator.err.log
+            harness-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   publish-release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'

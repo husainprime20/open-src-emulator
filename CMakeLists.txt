@@ -36,4 +36,22 @@ else()
     target_compile_options(OpenSrc PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Console harness that runs the exact same provisioning code as the GUI.
+# Used by CI to verify the real Android runtime download/setup, and handy for
+# developers debugging setup without launching the window.
+qt_add_executable(OpenSrcRuntimeSetup
+    desktop/src/runtimecli.cpp
+    desktop/src/runtimeinstaller.h
+    desktop/src/runtimeinstaller.cpp
+    desktop/src/settings.h
+    desktop/src/settings.cpp
+)
+target_link_libraries(OpenSrcRuntimeSetup PRIVATE Qt6::Core Qt6::Network)
+target_include_directories(OpenSrcRuntimeSetup PRIVATE desktop/src)
+if(MSVC)
+    target_compile_options(OpenSrcRuntimeSetup PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8)
+else()
+    target_compile_options(OpenSrcRuntimeSetup PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 install(TARGETS OpenSrc RUNTIME DESTINATION .)

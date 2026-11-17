@@ -6,6 +6,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -73,6 +74,26 @@ QString quoteForCmd(const QString &value)
     return '"' + cleaned + '"';
 }
 #endif
+
+// Minimal hardware profile owned by OpenSrc. Using our own definition (via
+// avdmanager --device-file) means AVD creation cannot fail because a
+// particular Google device id is absent from the downloaded tools.
+constexpr auto kDeviceDefinition = R"(autogen avd
+Name: OpenSrc Phone
+DeviceType: phone
+TagId: google_apis
+TagDisplay: Google APIs
+Manufacturer: OpenSrc
+Vendor: OpenSrc
+Identifier: opensrc_phone
+Screen:
+  ScreenSize: normal
+  ScreenRatio: long
+  ScreenRound: no
+  VSize: 6.0in
+  XDPI: 420
+  YDPI: 420
+)";
 
 bool isInstalledJava(const QString &root)
 {
@@ -560,13 +581,27 @@ void RuntimeInstaller::createAvd()
     emit statusChanged("Creating the default OpenSrc Android device…");
     setProgress(kPackagesSliceEnd);
     // avdmanager is a JCommander CLI: options must be written with '=' (space
-    // separated values are treated as extra positional arguments and rejected
-    // with the help text). "no" declines the custom hardware profile question.
-    runToolBatch(avdManagerPath(),
-                 {"create", "avd", "--force", "--name=" + QString::fromLatin1(kAvdName),
-                  "--package=" + QString::fromLatin1(kSystemImage), "--device=pixel_2",
-                  "--sdk_root=" + m_sdkRoot},
-                 Stage::CreateAvd, "no\n", "Creating the OpenSrc Android device failed");
+    // separated values are treated as positional arguments and rejected).
+    // "no" declines the custom hardware profile question.
+    const QString deviceFile = QDir(m_sdkRoot).filePath("opensrc-device.txt");
+    const QByteArray definitionText = QByteArray(kDeviceDefinition).trimmed() + '\n';
+    bool haveDefinition = false;
+    {
+        QFile definition(deviceFile);
+        if (definition.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            haveDefinition = definition.write(definitionText) == definitionText.size();
+    }
+    QStringList arguments{"create", "avd", "--force",
+                          "--name=" + QString::fromLatin1(kAvdName),
+                          "--package=" + QString::fromLatin1(kSystemImage)};
+    // Remember whether this attempt used OpenSrc's device definition so a
+    // rejected definition can be retried with a stock device id instead.
+    m_usedDeviceDefinition = haveDefinition;
+    if (haveDefinition) arguments << "--device-file=" + deviceFile;
+    else arguments << "--device=pixel";
+    arguments << "--sdk_root=" + m_sdkRoot;
+    runToolBatch(avdManagerPath(), arguments, Stage::CreateAvd, "no\n",
+                 "Creating the OpenSrc Android device failed");
 }
 
 void RuntimeInstaller::runToolBatch(const QString &batch, const QStringList &arguments, Stage stage,
@@ -640,6 +675,19 @@ void RuntimeInstaller::processFinished(int exitCode, QProcess::ExitStatus exitSt
     const QString description = m_failureDescription;
     m_failureDescription.clear();
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+        // If OpenSrc's own device definition was rejected, fall back once to a
+        // stock device id rather than failing the whole setup.
+        if (finishedStage == Stage::CreateAvd && m_usedDeviceDefinition) {
+            m_usedDeviceDefinition = false;
+            emit logReceived("Device definition was rejected; retrying with the stock 'pixel' profile.");
+            runToolBatch(avdManagerPath(),
+                         {"create", "avd", "--force",
+                          "--name=" + QString::fromLatin1(kAvdName),
+                          "--package=" + QString::fromLatin1(kSystemImage),
+                          "--device=pixel", "--sdk_root=" + m_sdkRoot},
+                         Stage::CreateAvd, "no\n", "Creating the OpenSrc Android device failed");
+            return;
+        }
         fail(description.isEmpty()
                  ? QString("Android runtime setup stage failed (exit code %1).").arg(exitCode)
                  : QString("%1 (exit code %2).").arg(description).arg(exitCode));

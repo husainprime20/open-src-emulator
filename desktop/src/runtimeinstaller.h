@@ -86,5 +86,6 @@ private:
     int m_progressSpan = 100;
     int m_lastToolPercent = 0;
     bool m_finishing = false;
+    bool m_usedDeviceDefinition = false;
     QStringList m_outputTail;
 };

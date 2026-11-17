@@ -171,8 +171,14 @@ QProcessEnvironment RuntimeInstaller::toolEnvironment() const
     const QString java = javaHome();
     env.insert("ANDROID_SDK_ROOT", m_sdkRoot);
     env.insert("ANDROID_HOME", m_sdkRoot);
+    // Only ONE preference-location variable may be set. sdklib resolves them all
+    // and fails when two of them disagree: ANDROID_USER_HOME is used as-is while
+    // ANDROID_PREFS_ROOT gets ".android" appended, so exporting both (even with
+    // the same value) yields two different paths, the lookup throws, and
+    // AndroidSdkHandler stores a null androidFolder. createAvdIniFile then fails
+    // with "Can't locate Android SDK installation directory for the AVD .ini
+    // file." ANDROID_USER_HOME is the documented, non-deprecated one.
     env.insert("ANDROID_USER_HOME", m_userHome);
-    env.insert("ANDROID_PREFS_ROOT", m_userHome);
     env.insert("ANDROID_AVD_HOME", m_avdHome);
     if (!java.isEmpty()) {
         env.insert("JAVA_HOME", java);

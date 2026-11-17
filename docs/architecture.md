@@ -16,7 +16,7 @@ C:\OpenSrc                       {app}
    │  ├─ licenses\               accepted SDK licences
    │  └─ openjdk\                private JRE 17 (Temurin)
    ├─ avd\                       OpenSrc_Default_API_35.ini + .avd\config.ini
-   └─ android-user\              ANDROID_USER_HOME / ANDROID_PREFS_ROOT
+   └─ android-user\              ANDROID_USER_HOME (single preference root)
 ```
 
 `PrivilegesRequired=lowest` with an explicit `DefaultDirName=C:\OpenSrc` lets a standard user install without a UAC prompt; the installer still elevates if the user selects a protected folder. Because program files keep their default ACLs, only the app-private `Runtime` subtree is made user-writable. That is what allows the multi-gigabyte Android download to happen later inside the app with no second elevation prompt.
@@ -44,7 +44,7 @@ Implementation details that matter:
 
 - **Batch files cannot be started by `CreateProcess`.** Qt's `QProcess` uses `CreateProcess`, so `sdkmanager.bat` is invoked through `cmd.exe /d /s /c` with every argument individually quoted. This is required for installs under paths containing spaces.
 - **The repository XML is not fully typed.** `repository2-1.xml` embeds the whole SDK licence text and its `checksum` elements do not reliably carry a `type` attribute, so the digest algorithm is inferred from the value length (40 → SHA-1, 64 → SHA-256). Package channels are read from `channelRef`; the stable channel (`channel-0`) is preferred.
-- **Java home must be the JRE root**, not `bin`; `JAVA_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME`, `ANDROID_USER_HOME`, and `ANDROID_PREFS_ROOT` are all pointed into `Runtime` so nothing leaks into `%USERPROFILE%\.android`.
+- **Java home must be the JRE root**, not `bin`; `JAVA_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` and `ANDROID_USER_HOME` are all pointed into `Runtime` so nothing leaks into `%USERPROFILE%\.android`. Only `ANDROID_USER_HOME` is used for the preference root: the tools append `.android` to `ANDROID_PREFS_ROOT`, so exporting both makes the two resolve to different paths, which makes sdklib throw and leaves the SDK handler without an `androidFolder`.
 - **avdmanager differs from sdkmanager.** It uses sdklib's own argument parser, not
   JCommander: options take a *separate* value argument (`-n name`, `-k "sdk_id"`),
   `--option=value` is rejected and makes it print usage, and it has no `--sdk_root`

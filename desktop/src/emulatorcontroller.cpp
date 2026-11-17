@@ -126,8 +126,11 @@ bool EmulatorController::launch(const AppSettings &settings, QString *error)
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert("ANDROID_SDK_ROOT", sdkRoot);
         environment.insert("ANDROID_HOME", sdkRoot);
+        // Set exactly one preference-location variable: the Android tools fail
+        // when ANDROID_USER_HOME and ANDROID_PREFS_ROOT resolve differently
+        // (".android" is appended to the latter), and then report that they
+        // cannot locate the SDK for the AVD .ini file.
         environment.insert("ANDROID_USER_HOME", QDir(runtimeRoot).filePath("android-user"));
-        environment.insert("ANDROID_PREFS_ROOT", QDir(runtimeRoot).filePath("android-user"));
         environment.insert("ANDROID_AVD_HOME", androidRuntimeAvdHome(runtimeRoot));
         m_process.setProcessEnvironment(environment);
     }

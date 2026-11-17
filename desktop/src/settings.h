@@ -2,9 +2,11 @@
 
 #include <QString>
 #include <QStringList>
-#include <QStringList>
 
 struct AppSettings {
+    QString runtimeEngine = "android-sdk";
+    QString androidEmulatorExecutable;
+    QString avdName;
     QString qemuExecutable;
     QString kernelImage;
     QString initrdImage;

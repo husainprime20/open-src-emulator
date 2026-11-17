@@ -40,6 +40,10 @@ private:
     QPushButton *m_stopButton = nullptr;
     QComboBox *m_themeCombo = nullptr;
     QComboBox *m_gpuCombo = nullptr;
+    QComboBox *m_engineCombo = nullptr;
+    QComboBox *m_avdCombo = nullptr;
+    QFrame *m_sdkPanel = nullptr;
+    QFrame *m_rawImagePanel = nullptr;
     QSpinBox *m_cpuSpin = nullptr;
     QSpinBox *m_memorySpin = nullptr;
     QSpinBox *m_widthSpin = nullptr;
@@ -71,5 +75,7 @@ private:
     void saveKeymap();
     void addMapping(const QString &action, const QString &binding);
     void refreshReadiness();
+    void refreshAvds();
+    void applyEngineUi();
     void selectPath(const QString &key, const QString &filter);
 };

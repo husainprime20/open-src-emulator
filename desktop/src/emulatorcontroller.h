@@ -23,4 +23,5 @@ signals:
 
 private:
     QProcess m_process;
+    QString m_runningEngine;
 };

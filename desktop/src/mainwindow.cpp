@@ -23,6 +23,7 @@
 #include <QStandardPaths>
 #include <QSaveFile>
 #include <QSignalBlocker>
+#include <QRegularExpression>
 #include <QTime>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -45,9 +46,31 @@ QFrame *divider()
 QString qemuFilter()
 {
 #ifdef Q_OS_WIN
-    return "QEMU executable (qemu-system-x86_64.exe);;All files (*.*)";
+    return "QEMU system executable (qemu-system-x86_64.exe);;All files (*.*)";
 #else
-    return "QEMU executable (qemu-system-x86_64);;All files (*)";
+    return "QEMU system executable (qemu-system-x86_64);;All files (*)";
+#endif
+}
+
+QString findAndroidEmulator()
+{
+    QString sdkRoot = qEnvironmentVariable("ANDROID_SDK_ROOT");
+    if (sdkRoot.isEmpty()) sdkRoot = qEnvironmentVariable("ANDROID_HOME");
+#ifdef Q_OS_WIN
+    if (sdkRoot.isEmpty()) sdkRoot = qEnvironmentVariable("LOCALAPPDATA") + "/Android/Sdk";
+#endif
+    if (!sdkRoot.isEmpty()) {
+#ifdef Q_OS_WIN
+        const QString candidate = QDir(sdkRoot).filePath("emulator/emulator.exe");
+#else
+        const QString candidate = QDir(sdkRoot).filePath("emulator/emulator");
+#endif
+        if (QFile::exists(candidate)) return QDir::toNativeSeparators(candidate);
+    }
+#ifdef Q_OS_WIN
+    return QStandardPaths::findExecutable("emulator.exe");
+#else
+    return QStandardPaths::findExecutable("emulator");
 #endif
 }
 }
@@ -161,10 +184,10 @@ MainWindow::MainWindow(QWidget *parent)
         if (running) {
             m_monitor.setProcessId(m_emulator.processId());
             m_monitor.start();
-            appendLog("QEMU process started; WHPX/TCG state is reported by QEMU output.");
+            appendLog("Android runtime process started; startup status is in the emulator output.");
         } else {
             m_monitor.stop();
-            appendLog("QEMU process stopped.");
+            appendLog("Android runtime process stopped.");
         }
     });
     connect(&m_emulator, &EmulatorController::outputReceived, this, &MainWindow::appendLog);
@@ -216,7 +239,7 @@ QWidget *MainWindow::makeOverviewPage()
     headingText->addWidget(label("A lighter way to play. Everything you need, nothing you don’t.", "subtitle"));
     heading->addLayout(headingText);
     heading->addStretch();
-    auto *buildTag = label("ANDROID 11  ·  X86_64", "buildTag");
+    auto *buildTag = label("ANDROID SDK  ·  AVD", "buildTag");
     buildTag->setAlignment(Qt::AlignCenter);
     heading->addWidget(buildTag, 0, Qt::AlignVCenter);
     layout->addLayout(heading);
@@ -250,7 +273,7 @@ QWidget *MainWindow::makeOverviewPage()
     auto *statusStack = new QVBoxLayout;
     m_runtimeStatus = label("Runtime not configured", "cardTitleSmall");
     statusStack->addWidget(m_runtimeStatus);
-    statusStack->addWidget(label("Choose your QEMU binary and AOSP files to get started.", "mutedText"));
+    statusStack->addWidget(label("Install Android Emulator and create an AVD to get started.", "mutedText"));
     heroBottom->addLayout(statusStack, 1);
     auto *setup = new QPushButton("Configure Android  →");
     setup->setObjectName("secondaryButton");
@@ -273,13 +296,13 @@ QWidget *MainWindow::makeOverviewPage()
     perfTop->addWidget(m_perfStatus);
     perfLayout->addLayout(perfTop);
     perfLayout->addWidget(label("Low clutter. Full visibility.", "cardTitle"));
-    perfLayout->addWidget(label("Host CPU and QEMU process memory. No telemetry is sent.", "mutedText"));
+    perfLayout->addWidget(label("Host CPU and Android Emulator process memory. No telemetry is sent.", "mutedText"));
     auto *metrics = new QHBoxLayout;
     auto *cpuCol = new QVBoxLayout;
     cpuCol->addWidget(label("HOST CPU", "metricLabel"));
     m_cpuValue = label("—", "metricValue"); cpuCol->addWidget(m_cpuValue);
     auto *memCol = new QVBoxLayout;
-    memCol->addWidget(label("QEMU RAM", "metricLabel"));
+    memCol->addWidget(label("PROCESS RAM", "metricLabel"));
     m_memoryValue = label("—", "metricValue"); memCol->addWidget(m_memoryValue);
     metrics->addLayout(cpuCol); metrics->addStretch(); metrics->addLayout(memCol);
     perfLayout->addLayout(metrics);
@@ -347,7 +370,9 @@ QWidget *MainWindow::makeOverviewPage()
             return;
         }
         const QStringList args = m_emulator.buildArguments(m_settings);
-        appendLog("Launching: " + QDir::toNativeSeparators(m_settings.qemuExecutable) + " " + args.join(' '));
+        const QString executable = m_settings.runtimeEngine == "android-sdk"
+            ? m_settings.androidEmulatorExecutable : m_settings.qemuExecutable;
+        appendLog("Launching: " + QDir::toNativeSeparators(executable) + " " + args.join(' '));
     });
     launchRow->addWidget(m_stopButton);
     launchRow->addWidget(m_launchButton);
@@ -370,7 +395,11 @@ QWidget *MainWindow::makePathField(const QString &key, const QString &fieldLabel
     layout->addWidget(edit, 1); layout->addWidget(browse);
     m_pathEdits.insert(key, edit);
     connect(browse, &QPushButton::clicked, this, [this, key, filter] { selectPath(key, filter); });
-    connect(edit, &QLineEdit::editingFinished, this, [this] { saveSettings(); refreshReadiness(); });
+    connect(edit, &QLineEdit::editingFinished, this, [this, key] {
+        saveSettings();
+        if (key == "androidEmulatorExecutable") refreshAvds();
+        refreshReadiness();
+    });
     return row;
 }
 
@@ -382,7 +411,16 @@ QWidget *MainWindow::makeHardwarePage()
     outer->setSpacing(13);
     outer->addWidget(label("INSTANCE CONFIGURATION", "eyebrow"));
     outer->addWidget(label("Virtual hardware", "pageTitle"));
-    outer->addWidget(label("QEMU Q35 · WHPX · Android 11 x86_64. Choose your own files; nothing is bundled.", "subtitle"));
+    outer->addWidget(label("Use Android Studio’s supported AVD runtime, or experiment with raw QEMU and custom images.", "subtitle"));
+    auto *engineRow = new QHBoxLayout;
+    engineRow->addWidget(label("RUNTIME ENGINE", "fieldLabel"));
+    m_engineCombo = new QComboBox;
+    m_engineCombo->addItem("Android Emulator SDK · recommended", "android-sdk");
+    m_engineCombo->addItem("Raw QEMU · experimental", "raw-qemu");
+    engineRow->addWidget(m_engineCombo);
+    engineRow->addStretch();
+    engineRow->addWidget(label("The SDK engine loads the AVD’s kernel, ramdisk, and disks together.", "mutedText"));
+    outer->addLayout(engineRow);
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -391,14 +429,47 @@ QWidget *MainWindow::makeHardwarePage()
     columns->setContentsMargins(0, 2, 6, 8);
     columns->setSpacing(14);
 
+    m_sdkPanel = makePanel();
+    auto *sdkLayout = new QVBoxLayout(m_sdkPanel);
+    sdkLayout->setContentsMargins(17, 16, 17, 16);
+    sdkLayout->setSpacing(11);
+    sdkLayout->addWidget(label("SUPPORTED ANDROID RUNTIME", "eyebrow"));
+    sdkLayout->addWidget(label("Launch an Android Virtual Device", "cardTitle"));
+    sdkLayout->addWidget(label("Install Android Emulator and an x86_64 system image with Android Studio’s SDK Manager. Create a device in Device Manager. No kernel or image extraction is needed in this mode.", "mutedText"));
+    sdkLayout->addWidget(label("Android Emulator executable (emulator.exe)", "fieldLabel"));
+    sdkLayout->addWidget(makePathField("androidEmulatorExecutable", "Android Emulator executable", "Android Emulator (emulator.exe);;Executable (*.exe);;All files (*)"));
+    sdkLayout->addWidget(label("Available virtual devices (AVDs)", "fieldLabel"));
+    auto *avdRow = new QHBoxLayout;
+    m_avdCombo = new QComboBox;
+    m_avdCombo->setEditable(true);
+    m_avdCombo->setInsertPolicy(QComboBox::NoInsert);
+    m_avdCombo->setPlaceholderText("Create an AVD in Android Studio, then refresh");
+    auto *refreshAvdButton = new QPushButton("Refresh AVDs");
+    refreshAvdButton->setObjectName("browseButton");
+    avdRow->addWidget(m_avdCombo, 1);
+    avdRow->addWidget(refreshAvdButton);
+    sdkLayout->addLayout(avdRow);
+    sdkLayout->addWidget(label("In Android Studio: Tools → Device Manager → Create device. Install an API 30 x86_64 image, or choose another installed image.", "calloutText"));
+    connect(refreshAvdButton, &QPushButton::clicked, this, &MainWindow::refreshAvds);
+    connect(m_avdCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+        refreshReadiness();
+    });
+    connect(m_avdCombo->lineEdit(), &QLineEdit::editingFinished, this, [this] {
+        saveSettings();
+        refreshReadiness();
+    });
+    columns->addWidget(m_sdkPanel, 3);
+
     auto *images = makePanel();
+    m_rawImagePanel = images;
     auto *imageLayout = new QVBoxLayout(images);
     imageLayout->setContentsMargins(17, 16, 17, 16);
     imageLayout->setSpacing(9);
-    imageLayout->addWidget(label("01  /  BOOT FILES", "eyebrow"));
-    imageLayout->addWidget(label("Android image set", "cardTitle"));
-    imageLayout->addWidget(label("For Android 11 x86_64, provide compatible AOSP output files. Paths stay in local settings.", "mutedText"));
-    imageLayout->addWidget(label("QEMU system binary", "fieldLabel"));
+    imageLayout->addWidget(label("ADVANCED / EXPERIMENTAL", "eyebrow"));
+    imageLayout->addWidget(label("Raw QEMU boot files", "cardTitle"));
+    imageLayout->addWidget(label("Use only a matching QEMU-built Android image set. Google SDK AVD files are not reliably bootable through this generic raw-QEMU path.", "mutedText"));
+    imageLayout->addWidget(label("QEMU system executable · not the installer", "fieldLabel"));
     imageLayout->addWidget(makePathField("qemuExecutable", "QEMU executable", qemuFilter()));
     imageLayout->addWidget(label("Kernel image · required", "fieldLabel"));
     imageLayout->addWidget(makePathField("kernelImage", "kernel image", "Kernel / boot files (*.bin *.img *.elf);;All files (*)"));
@@ -418,12 +489,12 @@ QWidget *MainWindow::makeHardwarePage()
     hwLayout->setSpacing(10);
     hwLayout->addWidget(label("02  /  VIRTUAL DEVICE", "eyebrow"));
     hwLayout->addWidget(label("Shape your instance", "cardTitle"));
-    hwLayout->addWidget(label("Settings are validated before QEMU starts.", "mutedText"));
+    hwLayout->addWidget(label("Runtime settings are checked before launch.", "mutedText"));
     auto *form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignLeft);
     form->setVerticalSpacing(9);
     m_cpuSpin = new QSpinBox; m_cpuSpin->setRange(1, 64); m_cpuSpin->setSuffix(" cores");
-    m_memorySpin = new QSpinBox; m_memorySpin->setRange(1024, 262144); m_memorySpin->setSingleStep(512); m_memorySpin->setSuffix(" MiB");
+    m_memorySpin = new QSpinBox; m_memorySpin->setRange(1536, 8192); m_memorySpin->setSingleStep(512); m_memorySpin->setSuffix(" MiB");
     m_widthSpin = new QSpinBox; m_widthSpin->setRange(320, 7680); m_widthSpin->setSingleStep(80); m_widthSpin->setSuffix(" px");
     m_heightSpin = new QSpinBox; m_heightSpin->setRange(320, 7680); m_heightSpin->setSingleStep(80); m_heightSpin->setSuffix(" px");
     m_gpuCombo = new QComboBox;
@@ -440,19 +511,24 @@ QWidget *MainWindow::makeHardwarePage()
     hwLayout->addLayout(form);
     hwLayout->addWidget(m_whpxCheck); hwLayout->addWidget(m_audioCheck); hwLayout->addWidget(m_networkCheck);
     hwLayout->addWidget(divider());
-    hwLayout->addWidget(label("WHPX accelerates CPU virtualization only. VirtIO-GPU rendering depends on the QEMU build and guest drivers; VirGL is not enabled automatically.", "calloutText"));
+    hwLayout->addWidget(label("Android Emulator mode uses the AVD’s CPU, GPU, display, audio, and network profile; the memory field overrides its RAM. Raw QEMU controls are experimental.", "calloutText"));
     hwLayout->addStretch();
     columns->addWidget(hardware, 2);
     scroll->setWidget(contents);
     outer->addWidget(scroll, 1);
     auto *footer = new QHBoxLayout;
-    footer->addWidget(label("QEMU is launched with a direct argument list, not shell interpolation.", "footnote"));
+    footer->addWidget(label("Android Emulator and raw QEMU receive direct argument lists, not shell commands.", "footnote"));
     footer->addStretch();
     auto *save = new QPushButton("Save instance settings");
     save->setObjectName("primaryButton");
     connect(save, &QPushButton::clicked, this, [this] { saveSettings(); refreshReadiness(); });
     footer->addWidget(save);
     outer->addLayout(footer);
+    connect(m_engineCombo, &QComboBox::currentTextChanged, this, [this] {
+        applyEngineUi();
+        saveSettings();
+        refreshReadiness();
+    });
     return page;
 }
 
@@ -528,6 +604,19 @@ void MainWindow::loadSettingsIntoUi()
     const auto getEdit = [this](const QString &key) -> QLineEdit * {
         return qobject_cast<QLineEdit *>(m_pathEdits.value(key));
     };
+    if (m_settings.androidEmulatorExecutable.isEmpty())
+        m_settings.androidEmulatorExecutable = findAndroidEmulator();
+    if (m_engineCombo) {
+        const QSignalBlocker blocker(m_engineCombo);
+        const int index = m_engineCombo->findData(m_settings.runtimeEngine);
+        if (index >= 0) m_engineCombo->setCurrentIndex(index);
+    }
+    if (getEdit("androidEmulatorExecutable"))
+        getEdit("androidEmulatorExecutable")->setText(m_settings.androidEmulatorExecutable);
+    if (m_avdCombo) {
+        const QSignalBlocker blocker(m_avdCombo);
+        m_avdCombo->setEditText(m_settings.avdName);
+    }
     if (getEdit("qemuExecutable")) getEdit("qemuExecutable")->setText(m_settings.qemuExecutable);
     if (getEdit("kernelImage")) getEdit("kernelImage")->setText(m_settings.kernelImage);
     if (getEdit("initrdImage")) getEdit("initrdImage")->setText(m_settings.initrdImage);
@@ -551,6 +640,8 @@ void MainWindow::loadSettingsIntoUi()
         if (index >= 0) m_themeCombo->setCurrentIndex(index);
     }
     if (m_configPathLabel) m_configPathLabel->setText(m_settings.configFilePath());
+    applyEngineUi();
+    refreshAvds();
 
     if (m_mappingTable) {
         QFile file(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/keymap.json");
@@ -576,6 +667,9 @@ void MainWindow::collectSettingsFromUi()
         const auto *edit = qobject_cast<QLineEdit *>(m_pathEdits.value(key));
         return edit ? edit->text().trimmed() : QString();
     };
+    if (m_engineCombo) m_settings.runtimeEngine = m_engineCombo->currentData().toString();
+    m_settings.androidEmulatorExecutable = text("androidEmulatorExecutable");
+    if (m_avdCombo) m_settings.avdName = m_avdCombo->currentText().trimmed();
     m_settings.qemuExecutable = text("qemuExecutable");
     m_settings.kernelImage = text("kernelImage");
     m_settings.initrdImage = text("initrdImage");
@@ -714,8 +808,80 @@ void MainWindow::refreshReadiness()
 {
     if (!m_runtimeStatus) return;
     const QStringList missing = m_settings.missingBootFiles();
-    if (missing.isEmpty()) m_runtimeStatus->setText("Boot files found · ready to test launch");
-    else m_runtimeStatus->setText("Needs setup · " + QString::number(missing.size()) + " required item(s) missing");
+    if (!missing.isEmpty()) {
+        m_runtimeStatus->setText("Needs setup · " + QString::number(missing.size()) + " required item(s) missing");
+    } else if (m_settings.runtimeEngine == "android-sdk") {
+        m_runtimeStatus->setText("Settings complete · selected AVD must exist in Android Studio");
+    } else {
+        m_runtimeStatus->setText("Files found · raw QEMU Android boot is unverified");
+    }
+}
+
+void MainWindow::refreshAvds()
+{
+    if (!m_avdCombo) return;
+    const auto *edit = qobject_cast<QLineEdit *>(m_pathEdits.value("androidEmulatorExecutable"));
+    const QString executable = edit ? edit->text().trimmed() : m_settings.androidEmulatorExecutable;
+    const QString previous = m_avdCombo->currentText().trimmed().isEmpty()
+        ? m_settings.avdName : m_avdCombo->currentText().trimmed();
+    if (executable.isEmpty() || !QFile::exists(executable)) {
+        refreshReadiness();
+        return;
+    }
+
+    QProcess probe;
+    probe.setProgram(QFileInfo(executable).absoluteFilePath());
+    probe.setArguments({"-list-avds"});
+    probe.start();
+    if (!probe.waitForStarted(3000) || !probe.waitForFinished(8000)) {
+        probe.kill();
+        appendLog("Could not query AVDs from emulator.exe: " + probe.errorString());
+        refreshReadiness();
+        return;
+    }
+    const QString output = QString::fromLocal8Bit(probe.readAllStandardOutput());
+    const QString errors = QString::fromLocal8Bit(probe.readAllStandardError()).trimmed();
+    QStringList names;
+    for (const QString &line : output.split(QRegularExpression("[\\r\\n]+"), Qt::SkipEmptyParts)) {
+        const QString name = line.trimmed();
+        if (!name.isEmpty() && !names.contains(name)) names << name;
+    }
+    {
+        const QSignalBlocker blocker(m_avdCombo);
+        m_avdCombo->clear();
+        m_avdCombo->addItems(names);
+        if (!previous.isEmpty()) {
+            const int index = m_avdCombo->findText(previous);
+            if (index >= 0) m_avdCombo->setCurrentIndex(index);
+            else m_avdCombo->setEditText(previous);
+        }
+    }
+    if (previous.isEmpty() && !m_avdCombo->currentText().isEmpty()) {
+        m_settings.avdName = m_avdCombo->currentText().trimmed();
+        saveSettings();
+    }
+    if (probe.exitCode() != 0 || !errors.isEmpty())
+        appendLog("AVD discovery: " + (errors.isEmpty() ? QString("emulator exited with code %1").arg(probe.exitCode()) : errors));
+    else
+        appendLog(QString("Found %1 Android Virtual Device(s).").arg(names.size()));
+    refreshReadiness();
+}
+
+void MainWindow::applyEngineUi()
+{
+    const bool sdkEngine = m_engineCombo && m_engineCombo->currentData().toString() == "android-sdk";
+    if (m_sdkPanel) m_sdkPanel->setVisible(sdkEngine);
+    if (m_rawImagePanel) m_rawImagePanel->setVisible(!sdkEngine);
+    if (m_cpuSpin) m_cpuSpin->setEnabled(!sdkEngine);
+    if (m_widthSpin) m_widthSpin->setEnabled(!sdkEngine);
+    if (m_heightSpin) m_heightSpin->setEnabled(!sdkEngine);
+    if (m_gpuCombo) m_gpuCombo->setEnabled(!sdkEngine);
+    if (m_whpxCheck) {
+        m_whpxCheck->setEnabled(!sdkEngine);
+        m_whpxCheck->setToolTip(sdkEngine ? "The Android Emulator selects its Windows accelerator automatically." : QString());
+    }
+    if (m_audioCheck) m_audioCheck->setEnabled(!sdkEngine);
+    if (m_networkCheck) m_networkCheck->setEnabled(!sdkEngine);
 }
 
 void MainWindow::selectPath(const QString &key, const QString &filter)
@@ -727,6 +893,7 @@ void MainWindow::selectPath(const QString &key, const QString &filter)
     if (path.isEmpty()) return;
     edit->setText(QDir::toNativeSeparators(path));
     saveSettings();
+    if (key == "androidEmulatorExecutable") refreshAvds();
     refreshReadiness();
 }
 
@@ -911,7 +1078,7 @@ QWidget *MainWindow::makeAppearancePage()
     privacyLayout->setContentsMargins(18, 16, 18, 16);
     privacyLayout->addWidget(label("LOCAL BY DESIGN", "eyebrow"));
     privacyLayout->addWidget(label("No account. No silent sync.", "cardTitle"));
-    privacyLayout->addWidget(label("Settings and profiles are saved as JSON in the current Windows user’s application-data folder. QEMU receives only the files and options shown in your instance settings. The guest OS is separate and has its own network and privacy settings.", "mutedText"));
+    privacyLayout->addWidget(label("Settings and profiles are saved as JSON in the current Windows user’s application-data folder. OpenSrc starts the selected Android Emulator or raw-QEMU process with the configured options. The guest OS is separate and has its own network and privacy settings.", "mutedText"));
     privacyLayout->addWidget(divider());
     m_configPathLabel = label(m_settings.configFilePath(), "filePathText");
     privacyLayout->addWidget(m_configPathLabel);
@@ -942,8 +1109,8 @@ QWidget *MainWindow::makeArchitecturePage()
     auto *guestLayout = new QVBoxLayout(guest);
     guestLayout->setContentsMargins(16, 15, 16, 15);
     guestLayout->setSpacing(8);
-    guestLayout->addWidget(label("ANDROID GUEST  ·  AOSP 11 X86_64", "eyebrow"));
-    const QStringList guestSteps = {"Android UI + media", "Skia / OpenGL ES", "Mesa guest driver", "VirtIO-GPU guest driver", "virtio-gpu PCI device"};
+    guestLayout->addWidget(label("ANDROID GUEST  ·  SELECTED AVD", "eyebrow"));
+    const QStringList guestSteps = {"Android framework and apps", "AVD system image", "AVD hardware profile", "Persistent AVD user data"};
     for (int i = 0; i < guestSteps.size(); ++i) {
         auto *step = makePanel("pipelineNode");
         auto *stepLayout = new QHBoxLayout(step);
@@ -960,8 +1127,8 @@ QWidget *MainWindow::makeArchitecturePage()
     auto *hostLayout = new QVBoxLayout(host);
     hostLayout->setContentsMargins(16, 15, 16, 15);
     hostLayout->setSpacing(8);
-    hostLayout->addWidget(label("WINDOWS HOST  ·  QEMU", "eyebrow"));
-    const QStringList hostSteps = {"QEMU virtio-gpu device", "QEMU SDL display window", "Windows graphics driver", "Host GPU · display output"};
+    hostLayout->addWidget(label("WINDOWS HOST  ·  ANDROID EMULATOR", "eyebrow"));
+    const QStringList hostSteps = {"OpenSrc starts the selected AVD", "Android Emulator manages virtual devices", "Android Emulator selects a graphics backend", "Device appears in the Emulator window"};
     for (int i = 0; i < hostSteps.size(); ++i) {
         auto *step = makePanel("hostNode");
         auto *stepLayout = new QHBoxLayout(step);
@@ -977,8 +1144,8 @@ QWidget *MainWindow::makeArchitecturePage()
     auto *whpxLayout = new QVBoxLayout(whpx);
     whpxLayout->setContentsMargins(11, 10, 11, 10);
     whpxLayout->addWidget(label("CPU VIRTUALIZATION", "eyebrow"));
-    whpxLayout->addWidget(label("QEMU → WHPX → Hyper-V hypervisor", "pipelineText"));
-    whpxLayout->addWidget(label("This path accelerates guest CPU execution. It does not make VirtIO-GPU rendering hardware-accelerated by itself.", "mutedText"));
+    whpxLayout->addWidget(label("Android Emulator → Windows hypervisor (when available)", "pipelineText"));
+    whpxLayout->addWidget(label("The Android Emulator chooses its supported acceleration and graphics settings. OpenSrc does not configure a separate GPU passthrough path.", "mutedText"));
     hostLayout->addWidget(whpx);
     hostLayout->addStretch();
     columns->addWidget(host, 1);
@@ -987,7 +1154,7 @@ QWidget *MainWindow::makeArchitecturePage()
     auto *caveatLayout = new QHBoxLayout(caveat);
     caveatLayout->setContentsMargins(13, 10, 13, 10);
     caveatLayout->addWidget(label("!", "warningMark"));
-    caveatLayout->addWidget(label("VirGL / virglrenderer is not wired up on Windows in this build. The VirtIO GPU device is experimental and needs a matching AOSP guest driver plus a QEMU build that supports the selected renderer. Measure before calling it accelerated.", "calloutText"));
+    caveatLayout->addWidget(label("OpenSrc delegates rendering to Google's Android Emulator in AVD mode. Raw QEMU does not currently provide an integrated Android display or a validated Windows VirGL path.", "calloutText"));
     layout->addWidget(caveat);
     return page;
 }
@@ -1000,9 +1167,9 @@ QWidget *MainWindow::makeLogsPage()
     layout->setSpacing(13);
     auto *heading = new QHBoxLayout;
     auto *copy = new QVBoxLayout;
-    copy->addWidget(label("QEMU PROCESS", "eyebrow"));
+    copy->addWidget(label("ANDROID RUNTIME", "eyebrow"));
     copy->addWidget(label("Logs & diagnostics.", "pageTitle"));
-    copy->addWidget(label("Inspect QEMU output and the generated launch arguments.", "subtitle"));
+    copy->addWidget(label("Inspect Android Emulator or raw QEMU output and launch arguments.", "subtitle"));
     heading->addLayout(copy);
     heading->addStretch();
     auto *clear = new QPushButton("Clear log"); clear->setObjectName("browseButton");
@@ -1020,7 +1187,7 @@ QWidget *MainWindow::makeLogsPage()
     m_logView = new QTextEdit;
     m_logView->setObjectName("logView");
     m_logView->setReadOnly(true);
-    m_logView->setPlaceholderText("QEMU output appears here when you launch a configured Android instance.");
+    m_logView->setPlaceholderText("Android Emulator or raw QEMU output appears here after launch.");
     panelLayout->addWidget(m_logView, 1);
     layout->addWidget(panel, 1);
     return page;

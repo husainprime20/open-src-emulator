@@ -29,6 +29,10 @@ AppSettings AppSettings::load()
         return settings;
 
     const QJsonObject json = document.object();
+    const QString runtimeEngine = json.value("runtimeEngine").toString();
+    if (!runtimeEngine.isEmpty()) settings.runtimeEngine = runtimeEngine;
+    settings.androidEmulatorExecutable = json.value("androidEmulatorExecutable").toString();
+    settings.avdName = json.value("avdName").toString();
     settings.qemuExecutable = json.value("qemuExecutable").toString();
     settings.kernelImage = json.value("kernelImage").toString();
     settings.initrdImage = json.value("initrdImage").toString();
@@ -54,7 +58,10 @@ AppSettings AppSettings::load()
 bool AppSettings::save(QString *error) const
 {
     QJsonObject json;
-    json.insert("schemaVersion", 1);
+    json.insert("schemaVersion", 2);
+    json.insert("runtimeEngine", runtimeEngine);
+    json.insert("androidEmulatorExecutable", androidEmulatorExecutable);
+    json.insert("avdName", avdName);
     json.insert("qemuExecutable", qemuExecutable);
     json.insert("kernelImage", kernelImage);
     json.insert("initrdImage", initrdImage);
@@ -97,8 +104,15 @@ QString AppSettings::configFilePath() const
 QStringList AppSettings::missingBootFiles() const
 {
     QStringList missing;
+    if (runtimeEngine == "android-sdk") {
+        if (androidEmulatorExecutable.isEmpty() || !QFile::exists(androidEmulatorExecutable))
+            missing << "Android SDK emulator.exe";
+        if (avdName.trimmed().isEmpty())
+            missing << "An Android Virtual Device (AVD)";
+        return missing;
+    }
     if (qemuExecutable.isEmpty() || !QFile::exists(qemuExecutable))
-        missing << "QEMU executable";
+        missing << "QEMU system executable (not the installer)";
     if (kernelImage.isEmpty() || !QFile::exists(kernelImage))
         missing << "AOSP x86_64 kernel";
     if (!initrdImage.isEmpty() && !QFile::exists(initrdImage))

@@ -1,18 +1,26 @@
 # OpenSrc
 
-**OpenSrc is a Windows-first Android virtualization desktop app.** The native application is C++20 and Qt 6, with QEMU as the VM process and WHPX as the preferred Windows CPU accelerator. The app is licensed under GPL-3.0-or-later.
+OpenSrc is a Windows-first desktop front end for running Android Virtual Devices with the **Android Emulator SDK**. The native UI is C++20 / Qt 6. On the supported path, OpenSrc launches Google's Android Emulator with an AVD; that runtime owns the matched Android kernel, ramdisk, system/vendor images, virtual hardware, and boot parameters. Android Emulator selects an available supported Windows hypervisor accelerator (such as WHPX) when configured.
 
-This repository now contains a native Qt desktop shell and a QEMU process/configuration layer—not just the earlier browser mock. It can build and launch QEMU using user-selected boot files and settings, and provides local JSON-backed configuration, editable keymap profiles, appearance controls, QEMU logs, and Windows host/QEMU process monitoring.
+OpenSrc also retains an advanced **raw QEMU** path for compatible custom images. It is experimental and is not the recommended way to boot Android Studio SDK images. OpenSrc does not implement a new Android kernel or graphics stack from scratch.
 
-## Build on Windows
+## Get Android running
 
-Prerequisites:
+1. Install [Android Studio](https://developer.android.com/studio).
+2. In **SDK Manager → SDK Tools**, install **Android Emulator**. In **SDK Platforms** (or Device Manager), install an x86_64 system image, such as Android 11 / API 30.
+3. In **Tools → Device Manager**, create an AVD using that image and boot it once from Android Studio to confirm the SDK setup.
+4. Open OpenSrc → **Android instance**. The app attempts to find `emulator.exe` in `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the default Windows SDK directory. If it is not found, browse to `<Android SDK>\emulator\emulator.exe`—**not** `qemu-w64-setup-....exe`.
+5. Click **Refresh AVDs**, select the device, choose a memory override, save, then launch. The AVD keeps its own image files and persistent user data.
 
-- Windows 10/11 x64, Visual Studio 2022 C++ desktop workload
-- CMake 3.24 or newer
-- Qt 6.5+ (Widgets), built for the same MSVC toolchain
-- A Windows QEMU build with the selected machine, WHPX, SDL display, and VirtIO devices enabled
-- A QEMU-compatible Android 11 x86_64 image set supplied by you
+You do **not** need to select a separate kernel, ramdisk, or system image in Android Emulator SDK mode. The Android Emulator loads those as a matched AVD. The SDK image can be downloaded from Android Studio under its own license.
+
+## Raw QEMU mode (experimental)
+
+This mode is only for Android image sets built and configured specifically for the selected QEMU version, machine, device models, and boot arguments. A standard Android Studio `system.img` plus a separately downloaded kernel is not guaranteed to boot with generic QEMU flags. In Raw QEMU mode select the actual `qemu-system-x86_64.exe` executable, never the QEMU installer, then supply a complete compatible image set. Use the SDK mode if your goal is simply to run an Android Studio AVD.
+
+## Build OpenSrc on Windows
+
+Prerequisites: Windows 10/11 x64, Visual Studio 2022 C++ workload, CMake 3.24+, and Qt 6.5+ Widgets for MSVC 2022.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
@@ -20,35 +28,16 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
 cmake --build build --config Release
 ```
 
-Use `windeployqt` on `build/Release/OpenSrc.exe` (and ship/install a compatible QEMU build separately) when packaging. The selected QEMU executable and Android image paths are configured in **Android instance** inside the app.
+## Download builds from GitHub Actions
 
-## Download Windows builds from GitHub Actions
+`.github/workflows/windows-build.yml` builds the x64 app, deploys Qt, creates a portable ZIP, and compiles an Inno Setup installer on pushes, pull requests, and manual runs. Download **OpenSrc-Windows-Portable-x64** or **OpenSrc-Windows-Installer-x64** from the Actions run’s Artifacts section. Artifacts are retained for 30 days. A `v*.*.*` tag publishes both packages on a GitHub Release. Neither package bundles Android Studio, QEMU, Android images, or AVDs.
 
-`.github/workflows/windows-build.yml` builds the x64 app, deploys the Qt runtime, packages a portable ZIP, and compiles an Inno Setup installer on pushes, pull requests, and manual runs. Open the workflow run in the repository’s **Actions** tab and download **OpenSrc-Windows-Portable-x64** or **OpenSrc-Windows-Installer-x64** from its Artifacts section. Artifacts are retained for 30 days. Pushing a version tag such as `v0.2.0` also publishes both packages as assets on a GitHub Release. The installer includes OpenSrc and Qt runtime files; it does **not** bundle QEMU or Android images.
+## Features and honest boundaries
 
-Windows Hypervisor Platform must be enabled in Windows Features for WHPX. TCG is an available fallback, but is much slower. Network is opt-in and uses QEMU user-mode NAT. Android system images are not bundled.
+- Obsidian / Paper / Aurora themes, local JSON settings, local keymap profile editing/import/export, process logs, and Windows CPU/process-memory monitoring.
+- SDK mode launches and lists existing AVDs and lets you override RAM. Android Studio / Device Manager owns AVD creation and its CPU, display, GPU, audio, and network profile.
+- Raw QEMU mode has configurable Q35, WHPX/TCG, VirtIO, disk, USB, audio, and NAT arguments, but generic Android image boot is not validated.
+- Keymap profiles currently save and import/export; guest key injection and on-screen mappings are not wired up yet. Direct MSI / BlueStacks config conversion is not claimed.
+- The Windows VirGL path shown in the supplied diagram is not implemented. WHPX accelerates CPU virtualization; it is not a GPU renderer.
 
-## What works in this first native build
-
-- Qt 6 desktop UI with glass / soft-depth styling, Obsidian / Paper / Aurora themes, a selectable accent, and local-first preferences.
-- Local JSON settings for CPU, memory, display size, image paths, WHPX/TCG, GPU device, audio, and network.
-- QEMU command construction for Q35, kernel / optional initrd, system / optional vendor and userdata disks, VirtIO display, USB keyboard/tablet, optional audio and NAT.
-- Start / stop lifecycle management using `QProcess`; graceful stop through the QEMU monitor before termination fallback.
-- QEMU output log and Windows host CPU + QEMU working-set sampling.
-- Editable local mapping profile, import/export for normalized JSON and simple `action=key` text.
-
-## Deliberate limitations (not yet equivalent to MSI / BlueStacks)
-
-- Android boot depends on a **compatible** kernel, initrd, partition layout, guest drivers, and boot arguments. A random AOSP `system.img` is not guaranteed to boot. Supply a known-good QEMU/ranchu-compatible AOSP 11 x86_64 image set and validate it on your QEMU build.
-- QEMU presents Android in its own SDL window; the guest display is not embedded inside the Qt shell yet.
-- Keymap profiles can be edited and persisted, but guest input injection / on-screen control overlays are not connected yet. BlueStacks/MSI proprietary `.cfg` conversion is not claimed; support must be built against real, versioned fixtures.
-- The VirtIO GPU device is experimental. The attached VirGL diagram is a **Linux** host path; Windows WHPX is only a CPU virtualization accelerator. This app does not currently wire up virglrenderer or a Windows accelerated VirtIO-GPU renderer. See [graphics architecture](docs/architecture.md).
-- Host utilization is basic monitoring, not a low-latency guarantee. No input-to-photon benchmark, FPS cap, GPU passthrough, Android app store, multi-instance manager, or cloud service is implemented yet.
-
-## Configuration and privacy
-
-Settings and keymaps are written as JSON under Qt's `QStandardPaths::AppConfigLocation` in the current user's profile. There is no login, telemetry, or cloud sync. QEMU is launched with a program path and argument vector through `QProcess`, never via a shell command string. Network access is disabled by default. See [docs/architecture.md](docs/architecture.md).
-
-## License
-
-GPL-3.0-or-later. See [LICENSE](LICENSE). OpenSrc is an independent project and is not affiliated with Google, BlueStacks, or MSI.
+OpenSrc has no login, cloud sync, or telemetry. App configuration is stored under the current Windows user's Qt application-data directory. See [graphics/runtime architecture](docs/architecture.md), [third-party notices](THIRD-PARTY-NOTICES.md), and [GPL-3.0-or-later](LICENSE).

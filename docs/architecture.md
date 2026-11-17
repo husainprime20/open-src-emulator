@@ -1,35 +1,35 @@
-# OpenSrc runtime and graphics path
+# OpenSrc runtime and graphics paths
 
-## Current Windows-first path
+## Recommended: Android Emulator SDK / AVD
 
 ```text
-ANDROID GUEST (AOSP 11 x86_64)              WINDOWS HOST
-┌───────────────────────────────┐            ┌──────────────────────────┐
-│ Android UI / media / apps     │            │ Windows GPU driver       │
-│ Skia / guest graphics driver │            │ QEMU SDL presentation    │
-│ VirtIO-GPU guest driver      │            │ QEMU VirtIO-GPU device   │
-└───────────────┬───────────────┘            └──────────────┬───────────┘
-                │ virtio-gpu PCI device                     │
-                └───────────────────────────────────────────┘
-
-QEMU guest CPU ───────── WHPX ───────── Windows Hypervisor Platform
+OpenSrc Qt desktop UI
+  └─ launches emulator.exe -avd <name> -memory <MiB>
+       └─ Android Emulator's QEMU-derived engine + supported Windows acceleration
+            ├─ loads the AVD-matched kernel-ranchu and ramdisk
+            ├─ loads system/vendor/userdata and AVD hardware config
+            └─ opens its Android device window
 ```
 
-The current Qt shell starts QEMU with a Q35 machine, a selected VirtIO display device, and a separate QEMU SDL window. It supports a selected x86_64 kernel, optional initrd, system/vendor/userdata disks, USB keyboard/tablet, optional DirectSound audio, and opt-in user-mode NAT. The process is owned by the Qt app; the QEMU monitor on stdio is used for a clean quit. Settings and editable keymap profiles are atomically saved as JSON in `QStandardPaths::AppConfigLocation`.
+This is the supported way in this project to run Android Studio system images: the Android SDK Emulator interprets the AVD metadata and assembles the right boot arguments/devices. OpenSrc discovers AVD names with `emulator.exe -list-avds`, stores the chosen AVD and emulator path in local JSON, and starts it as a child process. AVD creation and installation of the system image are handled by Android Studio's SDK Manager and Device Manager. CPU, screen, GPU, audio, and networking settings belong to the AVD profile; OpenSrc currently passes a memory override.
 
-## Important graphics distinction
+## Advanced: raw QEMU prototype
 
-The attached reference diagram shows **Linux** `virtio-gpu-pci` + `virglrenderer` + host OpenGL. That Linux rendering stack is not automatically available on Windows. WHPX accelerates guest CPU virtualization; it does not accelerate or implement the GPU path. OpenSrc currently exposes QEMU VirtIO GPU device choices but does not bundle or configure virglrenderer, a Windows VirGL backend, GPU passthrough, or an accelerated Qt guest display. The Windows UI calls the PCI variant experimental and explicitly warns about this boundary.
+```text
+Android guest (user-supplied compatible image set)
+  -> QEMU Q35 + WHPX/TCG + VirtIO devices
+  -> QEMU SDL window + Windows display stack
+```
 
-## Current integration boundaries
+The raw mode constructs a QEMU argument vector from the user-selected kernel/initrd/system/vendor/userdata files and virtual hardware choices. It is retained for experimentation, not advertised as a universal Android boot path. Android boot requires a matched kernel, ramdisk, partitions/fstab, guest drivers, machine, and boot args; random SDK images are not guaranteed to boot through this generic path.
 
-- The desktop shell and QEMU process lifecycle are implemented in C++20 / Qt 6.
-- The user supplies QEMU and Android-compatible image files. Android images are not included. A generic AOSP `system.img` may not boot unchanged: kernel, ramdisk, partition layout, fstab, kernel drivers, and boot arguments must match the selected QEMU machine/devices. Use a known-good QEMU/ranchu-compatible AOSP 11 x86_64 output set.
-- The display currently opens in QEMU's own SDL window, not embedded in the Qt app.
-- The keymapping editor imports/exports normalized JSON or simple `action=key` text and persists locally. It does **not** yet inject mapped keys into the guest. Direct MSI App Player / BlueStacks conversion requires real, versioned sample files and is not claimed.
-- CPU and RAM allocation, display resolution, WHPX/TCG selection, GPU device, audio, and optional NAT affect the QEMU command. The displayed FPS target was deliberately omitted because this path does not yet implement a frame limiter.
-- Monitoring samples host CPU load and the QEMU process working set on Windows. It is not an input-to-photon latency benchmark.
+## Graphics distinction
 
-## Privacy / access
+The supplied reference diagram's `virtio-gpu-pci -> virglrenderer -> host OpenGL` route is a **Linux** host path. Windows WHPX is a CPU accelerator, not a GPU renderer. OpenSrc does not currently provide Windows VirGL, GPU passthrough, or an integrated Qt guest display. In SDK mode Android Emulator owns graphics rendering and displays the device in its own window.
 
-No login, cloud sync, or telemetry is implemented. Configuration and keymap files stay under the current Windows user profile's Qt application config directory. Normal Windows file ACLs apply. Android guest privacy and network behavior are separate; NAT networking is off by default.
+## Current boundaries
+
+- No Android system image is bundled. Google SDK images are acquired and accepted under Android Studio / SDK licensing.
+- Keymap profiles persist locally and import/export normalized JSON or simple `action=key` text, but input remapping is not injected into the guest yet. No direct BlueStacks/MSI `.cfg` conversion is claimed.
+- Performance monitoring reports host CPU and emulator-process working set; it is not a latency benchmark.
+- Settings and keymaps live in Qt `QStandardPaths::AppConfigLocation`; no account, telemetry, or cloud sync is implemented.

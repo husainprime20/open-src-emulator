@@ -807,7 +807,8 @@ void MainWindow::importKeymap()
         for (const QJsonValue &value : rows) {
             const QJsonObject row = value.toObject();
             QString action = row.value("action").toString();
-            if (action.isEmpty()) action = row.value("name").toString(row.value("label").toString());
+            if (action.isEmpty()) action = row.value("name").toString();
+            if (action.isEmpty()) action = row.value("label").toString();
             QString key = row.value("key").toString();
             if (key.isEmpty()) key = row.value("keys").toVariant().toString();
             if (key.isEmpty()) key = row.value("binding").toString();

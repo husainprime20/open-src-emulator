@@ -35,8 +35,8 @@ Install Android runtime  (Android instance page)
   │      (answers "y", only after the UI licence checkbox was accepted)
   ├─ 4  cmd.exe /d /s /c sdkmanager.bat --install emulator platform-tools
   │      "system-images;android-35;google_apis;x86_64"
-  ├─ 5  cmd.exe /d /s /c avdmanager.bat create avd --name=OpenSrc_Default_API_35
-  │      --package … --tag=google_apis --abi=x86_64   into sdk\..\avd
+  ├─ 5  cmd.exe /d /s /c avdmanager.bat create avd -n OpenSrc_Default_API_35
+  │      -k "system-images;…" -f -d pixel   into sdk\..\avd
   └─ 6  ready: emulator.exe + AVD config both present
 ```
 
@@ -45,10 +45,11 @@ Implementation details that matter:
 - **Batch files cannot be started by `CreateProcess`.** Qt's `QProcess` uses `CreateProcess`, so `sdkmanager.bat` is invoked through `cmd.exe /d /s /c` with every argument individually quoted. This is required for installs under paths containing spaces.
 - **The repository XML is not fully typed.** `repository2-1.xml` embeds the whole SDK licence text and its `checksum` elements do not reliably carry a `type` attribute, so the digest algorithm is inferred from the value length (40 → SHA-1, 64 → SHA-256). Package channels are read from `channelRef`; the stable channel (`channel-0`) is preferred.
 - **Java home must be the JRE root**, not `bin`; `JAVA_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME`, `ANDROID_USER_HOME`, and `ANDROID_PREFS_ROOT` are all pointed into `Runtime` so nothing leaks into `%USERPROFILE%\.android`.
-- **avdmanager differs from sdkmanager.** It rejects unknown options with its usage
-  text, so it is called without `--sdk_root` (the SDK root comes from
-  `ANDROID_SDK_ROOT`), with `--option=value` syntax, and with the documented
-  `--tag=google_apis --abi=x86_64` pair rather than a possibly-missing device id.
+- **avdmanager differs from sdkmanager.** It uses sdklib's own argument parser, not
+  JCommander: options take a *separate* value argument (`-n name`, `-k "sdk_id"`),
+  `--option=value` is rejected and makes it print usage, and it has no `--sdk_root`
+  (the SDK root comes from `ANDROID_SDK_ROOT`). AVD creation therefore uses the
+  documented `create avd -n <name> -k <sdk_id> -f [-d pixel]` form.
 - **Current command-line tools deprecate sdkmanager.** Recent releases print a notice
   and bootstrap Google's newer "Android CLI"; package installation still works, and
   progress parsing tolerates the extra lines.

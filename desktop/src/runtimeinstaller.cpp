@@ -567,16 +567,18 @@ void RuntimeInstaller::createAvd()
 
 void RuntimeInstaller::startAvdCreateAttempt()
 {
-    // Only the documented form is used: avdmanager does not accept --sdk_root
-    // (the SDK root comes from ANDROID_SDK_ROOT, which toolEnvironment() sets),
-    // options need the '--option=value' form, and the tool rejects unknown
-    // options by printing its usage. Recent command-line tools also deprecate
-    // avdmanager in favour of the Android CLI, so this is kept minimal and has a
-    // second attempt in case a build also wants the ABI spelled out.
-    QStringList arguments{"create", "avd", "--force",
-                          "--name=" + QString::fromLatin1(kAvdName),
-                          "--package=" + QString::fromLatin1(kSystemImage)};
-    if (m_avdAttempt == 1) arguments << "--abi=x86_64";
+    // avdmanager uses sdklib's own argument parser, which is NOT JCommander:
+    // options must be followed by a *separate* value argument ("-n name"),
+    // "--name=name" is rejected and makes the tool print its usage. It also has
+    // no --sdk_root option (the SDK root comes from ANDROID_SDK_ROOT, which
+    // toolEnvironment() sets). The documented form is:
+    //   avdmanager create avd -n <name> -k "<sdk_id>" [-f] [-d <device>]
+    QStringList arguments{"create", "avd", "-f",
+                          "-n", QString::fromLatin1(kAvdName),
+                          "-k", QString::fromLatin1(kSystemImage)};
+    // "pixel" is a long-standing device id; the second attempt omits it so
+    // avdmanager picks its own default if the device list changed.
+    if (m_avdAttempt == 0) arguments << "-d" << "pixel";
     runToolBatch(avdManagerPath(), arguments, Stage::CreateAvd, "no\n",
                  "Creating the OpenSrc Android device failed");
 }

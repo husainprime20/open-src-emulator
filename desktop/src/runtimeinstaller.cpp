@@ -504,9 +504,10 @@ void RuntimeInstaller::installExtractedTools()
     // wrap it one level deeper, so accept either layout.
     QString source = QDir(output).filePath("cmdline-tools");
     if (!QFileInfo::exists(QDir(source).filePath("bin"))) {
-        const QDirIterator it(output, {"cmdline-tools"}, QDir::Dirs | QDir::NoDotAndDotDot,
-                              QDirIterator::Subdirectories);
-        source = it.hasNext() ? it.next() : source;
+        // next() mutates the iterator, so it cannot be const.
+        QDirIterator it(output, {"cmdline-tools"}, QDir::Dirs | QDir::NoDotAndDotDot,
+                       QDirIterator::Subdirectories);
+        if (it.hasNext()) source = it.next();
     }
     const QString destination = QDir(m_sdkRoot).filePath("cmdline-tools/latest");
     if (!copyDirectory(source, destination)) {

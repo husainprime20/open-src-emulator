@@ -1,6 +1,8 @@
 #include "emulatorcontroller.h"
 
+#include <QDir>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 
 namespace {
 QString diskFormat(const QString &path)
@@ -46,8 +48,17 @@ QStringList EmulatorController::buildArguments(const AppSettings &settings, QStr
 {
     const QStringList missing = settings.missingBootFiles();
     if (!missing.isEmpty()) {
-        if (error) *error = "Set up these files first: " + missing.join(", ");
+        if (error) *error = "Set up these items first: " + missing.join(", ");
         return {};
+    }
+    if (settings.runtimeEngine == "android-sdk") {
+        // Let the official Android Emulator load the AVD's matching kernel, ramdisk,
+        // system/vendor images, device profile, and boot parameters as a set.
+        if (settings.memoryMiB < 1536 || settings.memoryMiB > 8192) {
+            if (error) *error = "Android Emulator RAM must be between 1536 and 8192 MiB.";
+            return {};
+        }
+        return {"-avd", settings.avdName.trimmed(), "-memory", QString::number(settings.memoryMiB)};
     }
     if (settings.cpuCores < 1 || settings.cpuCores > 64) {
         if (error) *error = "CPU cores must be between 1 and 64.";
@@ -100,9 +111,29 @@ bool EmulatorController::launch(const AppSettings &settings, QString *error)
     const QStringList args = buildArguments(settings, error);
     if (args.isEmpty()) return false;
 
-    m_process.setProgram(QFileInfo(settings.qemuExecutable).absoluteFilePath());
+    const QString executable = settings.runtimeEngine == "android-sdk"
+        ? settings.androidEmulatorExecutable : settings.qemuExecutable;
+    m_runningEngine = settings.runtimeEngine;
+    m_process.setProgram(QFileInfo(executable).absoluteFilePath());
     m_process.setArguments(args);
-    m_process.setWorkingDirectory(QFileInfo(settings.qemuExecutable).absolutePath());
+    m_process.setWorkingDirectory(QFileInfo(executable).absolutePath());
+    if (settings.runtimeEngine == "android-sdk") {
+        // Point the emulator at the exact SDK/AVD tree OpenSrc provisioned. Without
+        // this the emulator falls back to %USERPROFILE%\.android\avd and would not
+        // find the managed device.
+        const QString runtimeRoot = settings.effectiveRuntimeRoot();
+        const QString sdkRoot = androidRuntimeSdkRoot(runtimeRoot);
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert("ANDROID_SDK_ROOT", sdkRoot);
+        environment.insert("ANDROID_HOME", sdkRoot);
+        // Set exactly one preference-location variable: the Android tools fail
+        // when ANDROID_USER_HOME and ANDROID_PREFS_ROOT resolve differently
+        // (".android" is appended to the latter), and then report that they
+        // cannot locate the SDK for the AVD .ini file.
+        environment.insert("ANDROID_USER_HOME", QDir(runtimeRoot).filePath("android-user"));
+        environment.insert("ANDROID_AVD_HOME", androidRuntimeAvdHome(runtimeRoot));
+        m_process.setProcessEnvironment(environment);
+    }
     m_process.start();
     if (!m_process.waitForStarted(2500)) {
         if (error) *error = m_process.errorString();
@@ -114,14 +145,15 @@ bool EmulatorController::launch(const AppSettings &settings, QString *error)
 void EmulatorController::stop()
 {
     if (!isRunning()) return;
-    // `-serial mon:stdio` exposes the QEMU monitor on stdin. Try a clean stop first.
-    m_process.write("quit\n");
-    if (!m_process.waitForFinished(2500)) {
-        m_process.terminate();
-        if (!m_process.waitForFinished(1500)) {
-            m_process.kill();
-            m_process.waitForFinished(1000);
-        }
+    if (m_runningEngine == "raw-qemu") {
+        // Raw QEMU exposes the monitor on stdin through -serial mon:stdio.
+        m_process.write("quit\n");
+        if (m_process.waitForFinished(2500)) return;
+    }
+    m_process.terminate();
+    if (!m_process.waitForFinished(2000)) {
+        m_process.kill();
+        m_process.waitForFinished(1000);
     }
 }
 

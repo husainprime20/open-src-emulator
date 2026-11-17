@@ -38,15 +38,32 @@ jobs:
           & cmake --build build --config Release --parallel 2>&1 | Tee-Object -FilePath build-output.log
           $buildExit = $LASTEXITCODE
           if ($buildExit -ne 0) {
-            $diagnostics = Select-String -Path build-output.log -Pattern 'error C\\d+|fatal error C\\d+|error LNK\\d+|fatal error LNK\\d+' | Select-Object -First 20
-            if (-not $diagnostics) { $diagnostics = Get-Content build-output.log -Tail 20 }
-            foreach ($item in $diagnostics) {
-              $message = if ($item -is [Microsoft.PowerShell.Commands.MatchInfo]) { $item.Line } else { [string]$item }
+            # The console log is unreadable through the API from some clients, so
+            # surface the real failure as annotations. Cover compiler, linker and
+            # MSBuild/custom-build errors, then fall back to the log tail.
+            $all = Get-Content build-output.log
+            $pattern = 'error [A-Z]+[0-9]{3,}|fatal error|error MSB[0-9]+|LNK[0-9]{3,}|C[0-9]{4}:|The system cannot find|not found|Exception|failed'
+            $diagnostics = @($all | Where-Object { $_ -match $pattern })
+            if ($diagnostics.Count -eq 0) { $diagnostics = @($all | Select-Object -Last 40) }
+            $diagnostics = $diagnostics | Select-Object -First 25
+            foreach ($line in $diagnostics) {
+              $message = [string]$line
               $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
               Write-Output "::error title=Windows build diagnostic::$message"
             }
           }
           exit $buildExit
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSrc-build-log
+          path: |
+            build-output.log
+            iscc.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Assemble portable app
         shell: pwsh
@@ -79,8 +96,62 @@ jobs:
           $version = $Matches[1]
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
-          & $iscc "/DAppVersion=$version" "/Oartifacts" "installer/OpenSrc.iss"
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          & $iscc "/DAppVersion=$version" "/Oartifacts" "installer/OpenSrc.iss" 2>&1 | Tee-Object -FilePath iscc.log
+          $isccExit = $LASTEXITCODE
+          if ($isccExit -ne 0) {
+            Get-Content iscc.log | Select-Object -Last 30 | ForEach-Object {
+              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Inno Setup diagnostic::$m"
+            }
+            throw "ISCC failed with exit code $isccExit"
+          }
+
+      - name: Verify installer creates the C-drive runtime layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem artifacts/OpenSrc-Setup-*.exe | Select-Object -First 1
+          if (-not $setup) { throw 'Installer executable was not produced' }
+          $installDir = 'C:\OpenSrc'
+          $log = "$env:RUNNER_TEMP\install.log"
+          $process = Start-Process -FilePath $setup.FullName `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/LOG=$log" `
+            -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            throw "Installer exited with code $($process.ExitCode)"
+          }
+          foreach ($relative in 'OpenSrc.exe','Runtime','Runtime\sdk','Runtime\avd','Runtime\android-user') {
+            $path = Join-Path $installDir $relative
+            if (-not (Test-Path $path)) { throw "Installer did not create $path" }
+          }
+          # The runtime folder must be writable by the invoking user so the app can
+          # download Android components there without a later elevation prompt.
+          $probe = Join-Path $installDir 'Runtime\write-probe.txt'
+          Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+          Remove-Item $probe -Force
+          Write-Output "Verified self-contained layout under $installDir"
+
+      - name: Smoke-test installed app startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'C:\OpenSrc\OpenSrc.exe'
+          if (-not (Test-Path $exe)) { throw "Installed executable missing at $exe" }
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 12
+          $app.Refresh()
+          if ($app.HasExited) { throw "OpenSrc exited during startup with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          Write-Output 'OpenSrc started from the C: install without a missing-DLL failure'
+
+      - name: Clean up test install
+        shell: pwsh
+        run: |
+          # The uninstaller offers to keep the runtime; a silent uninstall skips
+          # that prompt, so remove the test folder directly to keep the run clean.
+          if (Test-Path 'C:\OpenSrc') { Remove-Item 'C:\OpenSrc' -Recurse -Force -ErrorAction SilentlyContinue }
+          Write-Output 'Test install removed'
 
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
@@ -97,6 +168,225 @@ jobs:
           path: artifacts/OpenSrc-Setup-*.exe
           if-no-files-found: error
           retention-days: 30
+
+  provision-runtime:
+    name: Provision real Android runtime (Windows)
+    runs-on: windows-2022
+    # This downloads roughly 3 GB of upstream components, so it runs on demand,
+    # on tags, and on pull requests. It exercises the production provisioning
+    # code path end to end instead of assuming it works.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build setup harness
+        shell: pwsh
+        run: |
+          & cmake --build build --config Release --target OpenSrcRuntimeSetup --parallel 2>&1 | Tee-Object -FilePath harness-build.log
+          if ($LASTEXITCODE -ne 0) { throw "Harness build failed" }
+
+      - name: Deploy harness Qt DLLs
+        shell: pwsh
+        run: |
+          $exe = 'build/Release/OpenSrcRuntimeSetup.exe'
+          if (-not (Test-Path $exe)) { throw "Harness executable missing at $exe" }
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --no-translations --no-opengl-sw --no-system-d3d-compiler --dir build/Release $exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+
+      - name: Probe avdmanager options
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # The published command-line tools are changing under us: avdmanager.bat
+          # prints a legacy usage block and rejects options the docs describe.
+          # Ask the tool itself what it accepts instead of guessing again.
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_HOME = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:JAVA_HOME = "$root\sdk\openjdk"
+          $bin = "$root\sdk\cmdline-tools\latest\bin"
+          if (-not (Test-Path "$bin\avdmanager.bat")) {
+            Write-Output 'avdmanager.bat not installed yet (first provisioning run)'
+            exit 0
+          }
+          Write-Output '=== avdmanager.bat contents ==='
+          Get-Content "$bin\avdmanager.bat"
+          Write-Output '=== avdmanager.bat create avd --help ==='
+          & "$bin\avdmanager.bat" create avd --help 2>&1 | Select-Object -First 30
+          Write-Output '=== bundled jars ==='
+          Get-ChildItem "$root\sdk\cmdline-tools\latest\lib" -Filter '*.jar' | Select-Object -ExpandProperty Name
+
+      - name: "Provision the runtime into the C-drive install layout"
+        shell: pwsh
+        run: |
+          # Install into the same layout a real install uses, so this also proves
+          # the folder/paths work on the system drive. --twice re-runs setup on
+          # the completed runtime to exercise the resume path.
+          $root = 'C:\OpenSrc\Runtime'
+          $exe = (Resolve-Path 'build/Release/OpenSrcRuntimeSetup.exe').Path
+          & $exe --root $root --twice 2>&1 | Tee-Object -FilePath provision.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # Prefer the harness's own one-line reason; it already includes the
+            # tail of sdkmanager/tool output that explains the failure.
+            $reason = Select-String -Path provision.log -Pattern 'FAILURE_REASON:' | Select-Object -Last 1
+            if ($reason) {
+              $m = [string]$reason.Line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Android runtime provisioning::$m"
+            }
+            Get-Content provision.log -Tail 40 | ForEach-Object {
+              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Provisioning output::$m"
+            }
+            throw "Provisioning failed with exit code $code"
+          }
+
+      - name: Assert resume did not re-download
+        shell: pwsh
+        run: |
+          $log = Get-Content provision.log -Raw
+          if ($log -notmatch 'SECOND PASS') { throw 'Resume pass did not run' }
+          if ($log -notmatch 'RESULT: ready \(resume verified\)') { throw 'Resume pass did not report ready' }
+          Write-Output 'Second setup pass completed on the existing runtime'
+
+      - name: Assert the provisioned runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'C:\OpenSrc\Runtime'
+          $expected = @(
+            'sdk\cmdline-tools\latest\bin\sdkmanager.bat',
+            'sdk\cmdline-tools\latest\bin\avdmanager.bat',
+            'sdk\emulator\emulator.exe',
+            'sdk\platform-tools\adb.exe',
+            'sdk\openjdk\bin\java.exe',
+            'sdk\licenses',
+            'avd\OpenSrc_Default_API_35.ini',
+            'avd\OpenSrc_Default_API_35.avd\config.ini'
+          )
+          foreach ($relative in $expected) {
+            $path = Join-Path $root $relative
+            if (-not (Test-Path $path)) { throw "Missing provisioned item: $path" }
+          }
+          $image = Get-ChildItem (Join-Path $root 'sdk\system-images\android-35\google_apis\x86_64') -Filter 'system.img' -ErrorAction SilentlyContinue
+          if (-not $image) { throw 'Android system image was not installed' }
+          $sizeMb = [math]::Round(((Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
+          Write-Output "Provisioned runtime: $sizeMb MB under $root"
+
+      - name: Verify the emulator sees the managed AVD
+        shell: pwsh
+        run: |
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:ANDROID_USER_HOME = "$root\android-user"
+          $emulator = "$root\sdk\emulator\emulator.exe"
+          $avds = & $emulator -list-avds 2>&1
+          Write-Output "emulator -list-avds: $($avds -join ', ')"
+          if ($avds -notcontains 'OpenSrc_Default_API_35') {
+            throw "-list-avds did not report the provisioned device (got: $($avds -join ', '))"
+          }
+          $ini = Join-Path $root 'avd\OpenSrc_Default_API_35.ini'
+          $cfg = Join-Path $root 'avd\OpenSrc_Default_API_35.avd\config.ini'
+          foreach ($f in @($ini, $cfg)) {
+            if (-not (Test-Path $f)) { throw "missing AVD file: $f" }
+            Write-Output "--- $f ---"
+            Get-Content $f
+          }
+
+      - name: Boot the Android device headlessly
+        # GitHub-hosted Windows runners are themselves Hyper-V guests and do not
+        # expose nested virtualization, so WHPX cannot create a partition and an
+        # x86_64 guest cannot start. Treat an acceleration refusal as a skipped
+        # check (not a failure); any other emulator error still fails the job.
+        shell: pwsh
+        run: |
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_HOME = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:ANDROID_USER_HOME = "$root\android-user"
+          $emulator = "$root\sdk\emulator\emulator.exe"
+          $adb = "$root\sdk\platform-tools\adb.exe"
+
+          function Annotate([string]$level, [string]$title, [string]$line) {
+            $m = ([string]$line).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::$level title=$title::$m"
+          }
+
+          & $emulator -accel-check 2>&1 | ForEach-Object {
+            Write-Output "accel-check: $_"
+            Annotate 'warning' 'Acceleration check' $_
+          }
+
+          $proc = Start-Process -FilePath $emulator `
+            -ArgumentList @('-avd','OpenSrc_Default_API_35','-no-window','-no-audio','-no-snapshot','-no-boot-anim','-no-metrics','-gpu','swiftshader_indirect') `
+            -PassThru -RedirectStandardOutput emulator.out.log -RedirectStandardError emulator.err.log
+          $booted = $false
+          try {
+            for ($i = 0; $i -lt 36; $i++) {
+              Start-Sleep -Seconds 10
+              if ($proc.HasExited) { break }
+              $state = & $adb get-state 2>$null
+              if ($state -eq 'device') {
+                $done = & $adb shell getprop sys.boot_completed 2>$null
+                if ($done -and $done.Trim() -eq '1') { $booted = $true; break }
+              }
+            }
+
+            $log = @(Get-Content emulator.err.log -ErrorAction SilentlyContinue)
+            if ($booted) {
+              $release = & $adb shell getprop ro.build.version.release
+              $sdkLevel = & $adb shell getprop ro.build.version.sdk
+              Write-Output "Android guest booted: release=$($release.Trim()) api=$($sdkLevel.Trim())"
+              return
+            }
+
+            $text = ($log -join "`n")
+            $noVirtualization = $text -match 'WHPX|HW acceleration|hypervisor|HAXM|accel'
+            $log | Select-Object -First 80 | ForEach-Object {
+              if ($noVirtualization) { Annotate 'warning' 'Emulator log' $_ } else { Annotate 'error' 'Emulator log' $_ }
+            }
+            if ($noVirtualization) {
+              Write-Output '::notice title=Device boot skipped::This runner cannot provide hardware virtualization (WHPX partition creation failed), so the x86_64 guest cannot start. Provisioning, AVD creation and resume were still verified.'
+              Write-Output 'Device boot: SKIPPED (no nested virtualization on this runner)'
+              return
+            }
+            throw 'The provisioned Android device did not boot'
+          }
+          finally {
+            & $adb emu kill 2>$null
+            Start-Sleep -Seconds 3
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+      - name: Upload provisioning logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSrc-runtime-provisioning
+          path: |
+            provision.log
+            emulator.out.log
+            emulator.err.log
+            harness-build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   publish-release:
     name: Publish tagged release

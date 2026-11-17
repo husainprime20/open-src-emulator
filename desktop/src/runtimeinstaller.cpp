@@ -567,17 +567,16 @@ void RuntimeInstaller::createAvd()
 
 void RuntimeInstaller::startAvdCreateAttempt()
 {
-    // avdmanager is a JCommander CLI: options must use the '--option=value'
-    // form. It does NOT take --sdk_root (the SDK root comes from
-    // ANDROID_SDK_ROOT, which toolEnvironment() sets), and the current
-    // command-line tools release does not accept --device-file, so the image is
-    // selected with the documented --tag/--abi pair instead of a device id.
+    // Only the documented form is used: avdmanager does not accept --sdk_root
+    // (the SDK root comes from ANDROID_SDK_ROOT, which toolEnvironment() sets),
+    // options need the '--option=value' form, and the tool rejects unknown
+    // options by printing its usage. Recent command-line tools also deprecate
+    // avdmanager in favour of the Android CLI, so this is kept minimal and has a
+    // second attempt in case a build also wants the ABI spelled out.
     QStringList arguments{"create", "avd", "--force",
                           "--name=" + QString::fromLatin1(kAvdName),
                           "--package=" + QString::fromLatin1(kSystemImage)};
-    if (m_avdAttempt == 0) arguments << "--tag=google_apis" << "--abi=x86_64";
-    // m_avdAttempt == 1: only the package; avdmanager derives tag and ABI when
-    // the package has a single candidate.
+    if (m_avdAttempt == 1) arguments << "--abi=x86_64";
     runToolBatch(avdManagerPath(), arguments, Stage::CreateAvd, "no\n",
                  "Creating the OpenSrc Android device failed");
 }

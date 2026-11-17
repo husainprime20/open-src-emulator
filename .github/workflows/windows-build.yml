@@ -207,6 +207,26 @@ jobs:
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --no-translations --no-opengl-sw --no-system-d3d-compiler --dir build/Release $exe
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
 
+      - name: Probe avdmanager options
+        if: always()
+        shell: pwsh
+        run: |
+          # The published command-line tools are changing under us: avdmanager.bat
+          # prints a legacy usage block and rejects options the docs describe.
+          # Ask the tool itself what it accepts instead of guessing again.
+          $root = 'C:\OpenSrc\Runtime'
+          $env:ANDROID_SDK_ROOT = "$root\sdk"
+          $env:ANDROID_HOME = "$root\sdk"
+          $env:ANDROID_AVD_HOME = "$root\avd"
+          $env:JAVA_HOME = "$root\sdk\openjdk"
+          $bin = "$root\sdk\cmdline-tools\latest\bin"
+          Write-Output '=== avdmanager.bat contents ==='
+          Get-Content "$bin\avdmanager.bat"
+          Write-Output '=== avdmanager.bat create avd --help ==='
+          & "$bin\avdmanager.bat" create avd --help 2>&1 | Select-Object -First 30
+          Write-Output '=== bundled jars ==='
+          Get-ChildItem "$root\sdk\cmdline-tools\latest\lib" -Filter '*.jar' | Select-Object -ExpandProperty Name
+
       - name: "Provision the runtime into the C-drive install layout"
         shell: pwsh
         run: |
@@ -262,28 +282,6 @@ jobs:
           if (-not $image) { throw 'Android system image was not installed' }
           $sizeMb = [math]::Round(((Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
           Write-Output "Provisioned runtime: $sizeMb MB under $root"
-
-      - name: Probe avdmanager options
-        if: always()
-        shell: pwsh
-        run: |
-          # The published command-line tools are changing under us: avdmanager.bat
-          # prints a legacy usage block and rejects options the docs describe.
-          # Ask the tool itself what it accepts instead of guessing again.
-          $root = 'C:\OpenSrc\Runtime'
-          $env:ANDROID_SDK_ROOT = "$root\sdk"
-          $env:ANDROID_HOME = "$root\sdk"
-          $env:ANDROID_AVD_HOME = "$root\avd"
-          $env:JAVA_HOME = "$root\sdk\openjdk"
-          $bin = "$root\sdk\cmdline-tools\latest\bin"
-          Write-Output '=== avdmanager.bat (no arguments) ==='
-          & "$bin\avdmanager.bat" 2>&1 | Select-Object -First 40
-          Write-Output '=== avdmanager.bat create avd --help ==='
-          & "$bin\avdmanager.bat" create avd --help 2>&1 | Select-Object -First 40
-          Write-Output '=== java -jar avdmanager.jar ==='
-          $manifest = Get-Content "$bin\avdmanager.bat" -Raw
-          if ($manifest -match 'com\.android\.[\w.]+') { Write-Output "bat targets: $($Matches[0])" }
-          Get-ChildItem "$root\sdk\cmdline-tools\latest\lib" -Filter '*.jar' | Select-Object -ExpandProperty Name
 
       - name: Boot the Android device headlessly
         shell: pwsh

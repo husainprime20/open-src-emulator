@@ -559,10 +559,13 @@ void RuntimeInstaller::createAvd()
     }
     emit statusChanged("Creating the default OpenSrc Android device…");
     setProgress(kPackagesSliceEnd);
+    // avdmanager is a JCommander CLI: options must be written with '=' (space
+    // separated values are treated as extra positional arguments and rejected
+    // with the help text). "no" declines the custom hardware profile question.
     runToolBatch(avdManagerPath(),
-                 {"--sdk_root=" + m_sdkRoot, "create", "avd", "--force", "--name",
-                  QString::fromLatin1(kAvdName), "--package", QString::fromLatin1(kSystemImage),
-                  "--device", "pixel_2"},
+                 {"create", "avd", "--force", "--name=" + QString::fromLatin1(kAvdName),
+                  "--package=" + QString::fromLatin1(kSystemImage), "--device=pixel_2",
+                  "--sdk_root=" + m_sdkRoot},
                  Stage::CreateAvd, "no\n", "Creating the OpenSrc Android device failed");
 }
 

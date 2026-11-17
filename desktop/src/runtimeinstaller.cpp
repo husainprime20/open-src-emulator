@@ -330,6 +330,13 @@ void RuntimeInstaller::requestRepositoryMetadata()
                 }
             }
         }
+        if (xml.hasError() || selectedUrl.isEmpty()) {
+            fail("Android's package catalog did not contain the Windows command-line tools archive.");
+            return;
+        }
+        // Archive URLs in the catalog are relative to Google's repository root.
+        QUrl url(QStringLiteral("https://dl.google.com/android/repository/"));
+        url = url.resolved(QUrl(selectedUrl));
         m_toolsArchive = QDir(m_tempDir.path()).filePath("commandlinetools.zip");
         downloadFile(url, m_toolsArchive, Stage::DownloadTools, kToolsSliceBegin, kToolsSliceEnd,
                      selectedHash);

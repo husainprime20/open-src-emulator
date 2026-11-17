@@ -54,6 +54,7 @@ private:
     void beginLicenses();
     void installPackages();
     void createAvd();
+    void startAvdCreateAttempt();
     void runToolBatch(const QString &batch, const QStringList &arguments, Stage stage,
                       const QByteArray &input, const QString &description);
     void handleOutput(const QByteArray &bytes);
@@ -86,6 +87,6 @@ private:
     int m_progressSpan = 100;
     int m_lastToolPercent = 0;
     bool m_finishing = false;
-    bool m_usedDeviceDefinition = false;
+    int m_avdAttempt = 0;
     QStringList m_outputTail;
 };

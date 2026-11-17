@@ -574,32 +574,40 @@ void RuntimeInstaller::createAvd()
         emit finished(true, {});
         return;
     }
-    if (!QFile::exists(emulatorPath()) || !QFileInfo::exists(QDir(m_sdkRoot).filePath("system-images/android-35/google_apis/x86_64"))) {
+    if (!QFile::exists(emulatorPath()) ||
+        !QFileInfo::exists(QDir(m_sdkRoot).filePath("system-images/android-35/google_apis/x86_64"))) {
         fail("The Android Emulator or system image is still missing after package installation.");
         return;
     }
     emit statusChanged("Creating the default OpenSrc Android device…");
     setProgress(kPackagesSliceEnd);
-    // avdmanager is a JCommander CLI: options must be written with '=' (space
-    // separated values are treated as positional arguments and rejected).
-    // "no" declines the custom hardware profile question.
-    const QString deviceFile = QDir(m_sdkRoot).filePath("opensrc-device.txt");
-    const QByteArray definitionText = QByteArray(kDeviceDefinition).trimmed() + '\n';
-    bool haveDefinition = false;
-    {
-        QFile definition(deviceFile);
-        if (definition.open(QIODevice::WriteOnly | QIODevice::Truncate))
-            haveDefinition = definition.write(definitionText) == definitionText.size();
-    }
+    m_avdAttempt = 0;
+    startAvdCreateAttempt();
+}
+
+void RuntimeInstaller::startAvdCreateAttempt()
+{
+    // avdmanager is a JCommander CLI and rejects unknown options by printing its
+    // help text. It does NOT take --sdk_root (the SDK root comes from
+    // ANDROID_SDK_ROOT, which toolEnvironment() sets), and options need the
+    // '--option=value' form. Try progressively safer device choices so a change
+    // in Google's device catalogue cannot break provisioning.
     QStringList arguments{"create", "avd", "--force",
                           "--name=" + QString::fromLatin1(kAvdName),
                           "--package=" + QString::fromLatin1(kSystemImage)};
-    // Remember whether this attempt used OpenSrc's device definition so a
-    // rejected definition can be retried with a stock device id instead.
-    m_usedDeviceDefinition = haveDefinition;
-    if (haveDefinition) arguments << "--device-file=" + deviceFile;
-    else arguments << "--device=pixel";
-    arguments << "--sdk_root=" + m_sdkRoot;
+    const QString deviceFile = QDir(m_sdkRoot).filePath("opensrc-device.txt");
+    if (m_avdAttempt == 0) {
+        const QByteArray definitionText = QByteArray(kDeviceDefinition).trimmed() + '\n';
+        QFile definition(deviceFile);
+        if (definition.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+            definition.write(definitionText) == definitionText.size()) {
+            arguments << "--device-file=" + deviceFile;
+        } else {
+            m_avdAttempt = 1;
+        }
+    }
+    if (m_avdAttempt == 1) arguments << "--device=pixel";
+    // m_avdAttempt == 2: no device option; avdmanager picks its own default.
     runToolBatch(avdManagerPath(), arguments, Stage::CreateAvd, "no\n",
                  "Creating the OpenSrc Android device failed");
 }
@@ -675,17 +683,13 @@ void RuntimeInstaller::processFinished(int exitCode, QProcess::ExitStatus exitSt
     const QString description = m_failureDescription;
     m_failureDescription.clear();
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
-        // If OpenSrc's own device definition was rejected, fall back once to a
-        // stock device id rather than failing the whole setup.
-        if (finishedStage == Stage::CreateAvd && m_usedDeviceDefinition) {
-            m_usedDeviceDefinition = false;
-            emit logReceived("Device definition was rejected; retrying with the stock 'pixel' profile.");
-            runToolBatch(avdManagerPath(),
-                         {"create", "avd", "--force",
-                          "--name=" + QString::fromLatin1(kAvdName),
-                          "--package=" + QString::fromLatin1(kSystemImage),
-                          "--device=pixel", "--sdk_root=" + m_sdkRoot},
-                         Stage::CreateAvd, "no\n", "Creating the OpenSrc Android device failed");
+        // A rejected device choice should not fail the whole setup: step down
+        // through safer options and let avdmanager pick its default as a last resort.
+        if (finishedStage == Stage::CreateAvd && m_avdAttempt < 2) {
+            ++m_avdAttempt;
+            emit logReceived(QString("Device option rejected; retrying AVD creation (attempt %1).")
+                                 .arg(m_avdAttempt + 1));
+            startAvdCreateAttempt();
             return;
         }
         fail(description.isEmpty()

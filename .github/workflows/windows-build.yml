@@ -299,8 +299,19 @@ jobs:
           $emulator = "$root\sdk\emulator\emulator.exe"
           $adb = "$root\sdk\platform-tools\adb.exe"
 
-          $proc = Start-Process -FilePath $emulator `
-            -ArgumentList '-avd','OpenSrc_Default_API_35','-no-window','-no-audio','-no-snapshot','-no-boot-anim','-gpu','swiftshader_indirect' `
+          # Report acceleration state: the x86_64 emulator needs WHPX/Hyper-V on
+          # Windows and hosted runners may not provide it. Publish it as its own
+          # annotation so it stays readable even when the boot step fails.
+          & $emulator -accel-check 2>&1 | ForEach-Object {
+            Write-Output "accel-check: $_"
+            $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::warning title=Acceleration check::$m"
+          }
+
+          $args = @('-avd','OpenSrc_Default_API_35','-no-window','-no-audio','-no-snapshot',
+                    '-no-boot-anim','-gpu','swiftshader_indirect','-no-metrics')
+          Write-Output "Launching: $emulator $($args -join ' ')"
+          $proc = Start-Process -FilePath $emulator -ArgumentList $args `
             -PassThru -RedirectStandardOutput emulator.out.log -RedirectStandardError emulator.err.log
           try {
             $booted = $false
@@ -314,9 +325,14 @@ jobs:
               }
             }
             if (-not $booted) {
-              Get-Content emulator.err.log -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object {
+              # One annotation per log line: the check-run summary keeps only the
+              # head and tail, which previously hid the actual error message, but
+              # every annotation message survives intact.
+              $lines = @(Get-Content emulator.err.log -ErrorAction SilentlyContinue)
+              Write-Output "emulator.err.log had $($lines.Count) line(s)"
+              $lines | Select-Object -First 120 | ForEach-Object {
                 $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Output "::error title=Emulator boot::$m"
+                Write-Output "::error title=Emulator log::$m"
               }
               throw 'The provisioned Android device did not boot'
             }

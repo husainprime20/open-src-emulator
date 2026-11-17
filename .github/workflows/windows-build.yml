@@ -208,7 +208,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
 
       - name: Probe avdmanager options
-        if: always()
+        continue-on-error: true
         shell: pwsh
         run: |
           # The published command-line tools are changing under us: avdmanager.bat
@@ -220,6 +220,10 @@ jobs:
           $env:ANDROID_AVD_HOME = "$root\avd"
           $env:JAVA_HOME = "$root\sdk\openjdk"
           $bin = "$root\sdk\cmdline-tools\latest\bin"
+          if (-not (Test-Path "$bin\avdmanager.bat")) {
+            Write-Output 'avdmanager.bat not installed yet (first provisioning run)'
+            exit 0
+          }
           Write-Output '=== avdmanager.bat contents ==='
           Get-Content "$bin\avdmanager.bat"
           Write-Output '=== avdmanager.bat create avd --help ==='
@@ -231,7 +235,8 @@ jobs:
         shell: pwsh
         run: |
           # Install into the same layout a real install uses, so this also proves
-          # the folder/paths work on the system drive.
+          # the folder/paths work on the system drive. --twice re-runs setup on
+          # the completed runtime to exercise the resume path.
           $root = 'C:\OpenSrc\Runtime'
           $exe = (Resolve-Path 'build/Release/OpenSrcRuntimeSetup.exe').Path
           & $exe --root $root --twice 2>&1 | Tee-Object -FilePath provision.log

@@ -98,6 +98,10 @@ int main(int argc, char *argv[])
                              exitCode = 1;
                              say("RESULT: failed");
                              say("  " + error);
+                             // One greppable line so CI annotations carry the reason.
+                             QString flat = error;
+                             flat.replace('\r', ' ').replace('\n', " | ");
+                             say("FAILURE_REASON: " + flat);
                          }
                          QCoreApplication::exit(exitCode);
                      });

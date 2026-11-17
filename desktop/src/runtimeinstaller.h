@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QUrl>
+#include <QStringList>
 
 class QNetworkReply;
 
@@ -85,4 +86,5 @@ private:
     int m_progressSpan = 100;
     int m_lastToolPercent = 0;
     bool m_finishing = false;
+    QStringList m_outputTail;
 };

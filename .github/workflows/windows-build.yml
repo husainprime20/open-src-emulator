@@ -217,9 +217,16 @@ jobs:
           & $exe --root $root --twice 2>&1 | Tee-Object -FilePath provision.log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Get-Content provision.log -Tail 60 | ForEach-Object {
-              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            # Prefer the harness's own one-line reason; it already includes the
+            # tail of sdkmanager/tool output that explains the failure.
+            $reason = Select-String -Path provision.log -Pattern 'FAILURE_REASON:' | Select-Object -Last 1
+            if ($reason) {
+              $m = [string]$reason.Line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
               Write-Output "::error title=Android runtime provisioning::$m"
+            }
+            Get-Content provision.log -Tail 40 | ForEach-Object {
+              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Provisioning output::$m"
             }
             throw "Provisioning failed with exit code $code"
           }

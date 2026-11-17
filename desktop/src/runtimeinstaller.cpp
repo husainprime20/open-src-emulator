@@ -604,7 +604,14 @@ void RuntimeInstaller::handleOutput(const QByteArray &bytes)
     const QString text = QString::fromLocal8Bit(bytes);
     for (const QString &line : text.split(QRegularExpression("[\r\n]+"), Qt::SkipEmptyParts)) {
         const QString trimmed = line.trimmed();
-        if (!trimmed.isEmpty()) emit logReceived(trimmed);
+        if (trimmed.isEmpty()) continue;
+        emit logReceived(trimmed);
+        // sdkmanager redraws progress with carriage returns, so keep a bounded
+        // tail of real output to quote when a stage fails.
+        if (!trimmed.startsWith("[") && !trimmed.startsWith("  progress")) {
+            m_outputTail.append(trimmed);
+            while (m_outputTail.size() > 12) m_outputTail.removeFirst();
+        }
     }
     if (m_stage != Stage::InstallPackages) return;
     // sdkmanager draws "[====>   ] 42% Unpacking ..." progress and uses carriage
@@ -688,5 +695,11 @@ void RuntimeInstaller::fail(const QString &reason)
     m_stage = Stage::Idle;
     emit statusChanged("Android runtime setup failed");
     emit logReceived(reason);
-    emit finished(false, reason);
+    // The last lines of tool output are what actually explain a failure (for
+    // example sdkmanager's own message), so surface them with the failure.
+    for (const QString &line : m_outputTail) emit logReceived("  last output: " + line);
+    QString detail = reason;
+    if (!m_outputTail.isEmpty()) detail += "\n\nLast tool output:\n" + m_outputTail.join('\n');
+    m_outputTail.clear();
+    emit finished(false, detail);
 }

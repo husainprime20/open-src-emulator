@@ -263,22 +263,27 @@ jobs:
           $sizeMb = [math]::Round(((Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
           Write-Output "Provisioned runtime: $sizeMb MB under $root"
 
-      - name: Probe avdmanager directly
+      - name: Probe avdmanager options
         if: always()
         shell: pwsh
         run: |
-          # Control experiment: run the same tool the same way and print the FULL
-          # first lines, so a rejected option is identifiable rather than hidden
-          # behind the usage text.
+          # The published command-line tools are changing under us: avdmanager.bat
+          # prints a legacy usage block and rejects options the docs describe.
+          # Ask the tool itself what it accepts instead of guessing again.
           $root = 'C:\OpenSrc\Runtime'
           $env:ANDROID_SDK_ROOT = "$root\sdk"
           $env:ANDROID_HOME = "$root\sdk"
           $env:ANDROID_AVD_HOME = "$root\avd"
           $env:JAVA_HOME = "$root\sdk\openjdk"
-          $avdmanager = "$root\sdk\cmdline-tools\latest\bin\avdmanager.bat"
-          & $avdmanager create avd --force '--name=ProbeDevice' '--package=system-images;android-35;google_apis;x86_64' 2>&1 | Select-Object -First 15
-          Write-Output "probe exit: $LASTEXITCODE"
-          if (Test-Path "$root\avd\ProbeDevice.ini") { Write-Output 'probe: AVD created without --device' }
+          $bin = "$root\sdk\cmdline-tools\latest\bin"
+          Write-Output '=== avdmanager.bat (no arguments) ==='
+          & "$bin\avdmanager.bat" 2>&1 | Select-Object -First 40
+          Write-Output '=== avdmanager.bat create avd --help ==='
+          & "$bin\avdmanager.bat" create avd --help 2>&1 | Select-Object -First 40
+          Write-Output '=== java -jar avdmanager.jar ==='
+          $manifest = Get-Content "$bin\avdmanager.bat" -Raw
+          if ($manifest -match 'com\.android\.[\w.]+') { Write-Output "bat targets: $($Matches[0])" }
+          Get-ChildItem "$root\sdk\cmdline-tools\latest\lib" -Filter '*.jar' | Select-Object -ExpandProperty Name
 
       - name: Boot the Android device headlessly
         shell: pwsh

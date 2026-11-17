@@ -1,0 +1,14 @@
+build/
+out/
+dist/
+node_modules/
+.vs/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.log
+.DS_Store

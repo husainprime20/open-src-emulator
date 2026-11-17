@@ -59,7 +59,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenSrc-build-log
-          path: build-output.log
+          path: |
+            build-output.log
+            iscc.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -94,8 +96,15 @@ jobs:
           $version = $Matches[1]
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
-          & $iscc "/DAppVersion=$version" "/Oartifacts" "installer/OpenSrc.iss"
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          & $iscc "/DAppVersion=$version" "/Oartifacts" "installer/OpenSrc.iss" 2>&1 | Tee-Object -FilePath iscc.log
+          $isccExit = $LASTEXITCODE
+          if ($isccExit -ne 0) {
+            Get-Content iscc.log | Select-Object -Last 30 | ForEach-Object {
+              $m = [string]$_.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Inno Setup diagnostic::$m"
+            }
+            throw "ISCC failed with exit code $isccExit"
+          }
 
       - name: Verify installer creates the C-drive runtime layout
         shell: pwsh

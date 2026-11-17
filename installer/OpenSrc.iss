@@ -66,20 +66,19 @@ Name: "{autodesktop}\OpenSrc"; Filename: "{app}\{#AppExeName}"; Tasks: desktopic
 Filename: "{app}\{#AppExeName}"; Parameters: "--setup-runtime"; Description: "Launch OpenSrc and set up Android"; Flags: postinstall nowait skipifsilent
 
 [Code]
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+function InitializeUninstall(): Boolean;
 var
   RuntimeDir: String;
 begin
-  if CurUninstallStep = usUninstall then
-  begin
-    RuntimeDir := ExpandConstant('{app}\Runtime');
-    if DirExists(RuntimeDir) then
-    begin
-      if MsgBox('Also delete the downloaded Android runtime and virtual device data?' + #13#10 +
-                #13#10 + RuntimeDir + #13#10 + #13#10 +
-                'Choose No to keep your Android apps, data, and downloaded system image.',
-                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-        DelTree(RuntimeDir, True, True, True);
-    end;
-  end;
+  Result := True;
+  RuntimeDir := ExpandConstant('{app}\Runtime');
+  if not DirExists(RuntimeDir) then exit;
+  // Never prompt during a silent uninstall (or the uninstaller would hang).
+  if UninstallSilent() then exit;
+  if MsgBox('Also delete the downloaded Android runtime and virtual device data?'
+            + #13#10 + #13#10 + RuntimeDir + #13#10 + #13#10
+            + 'Choose Yes to delete it, or No to keep your Android apps, device data,'
+            + ' and the downloaded system image for a future reinstall.',
+            mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    DelTree(RuntimeDir, True, True, True);
 end;

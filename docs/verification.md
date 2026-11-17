@@ -51,11 +51,40 @@ build if it exits during startup (missing DLL / bad Qt deployment).
   is large and only a streaming/QXmlStreamReader parse is appropriate.
 - `system-images;android-35;google_apis;x86_64` is a real `sdkmanager` package id.
 
+## Verified in CI on Windows (pull_request run 44161601902)
+
+The `Provision real Android runtime (Windows)` job installs into the real
+`C:\OpenSrc\Runtime` layout and now passes end to end:
+
+- `sdkmanager` accepted the licences and installed the command-line tools,
+  `platform-tools`, the emulator and the 3.5 GB
+  `system-images;android-35;google_apis;x86_64` image.
+- `avdmanager create avd -n OpenSrc_Default_API_35 -k "system-images;…" -f -d pixel`
+  created `avd\OpenSrc_Default_API_35.ini` and `.avd\config.ini`.
+- The second (`--twice`) run reported the runtime as already present and did not
+  re-download it (resume path).
+- The harness exited 0 and the assertion step confirmed the installed files.
+
+Two library behaviours had to be discovered to get there, both now encoded in
+`RuntimeInstaller`:
+
+1. `avdmanager` does **not** use JCommander. Options take a separate value
+   argument (`-n name`, `-k "sdk_id"`); `--name=value` is rejected by printing
+   usage, which is why every earlier attempt failed identically.
+2. Only **one** Android preference-root variable may be set. `ANDROID_PREFS_ROOT`
+   gets `.android` appended while `ANDROID_USER_HOME` does not, so exporting both
+   makes sdklib throw and leaves the SDK handler with a null `androidFolder`;
+   `createAvdIniFile` then fails with *"Can't locate Android SDK installation
+   directory for the AVD .ini file."*
+
 ## Still unverified (must not be claimed as working)
 
-- The in-app download → install → **cold boot** of the Android guest on real hardware.
-  CI deliberately does not fetch the ~3 GB runtime on every build.
-- Whether `pixel_2` is accepted by `avdmanager` as a device id in the shipped
-  command-line tools version.
+- **Cold boot of the Android guest.** GitHub-hosted Windows runners are
+  themselves Hyper-V guests and expose no nested virtualization, so WHPX cannot
+  create a partition (`hr=c0350005`) and the x86_64 guest exits immediately.
+  The workflow records this and skips the boot check rather than failing. Boot
+  must be confirmed on real Windows hardware with virtualization enabled.
 - Emulator window behaviour, audio, and networking at runtime.
+- The in-app (GUI) download → install flow, which shares this code path but is
+  not exercised by CI.
 - Keymapper input injection and on-screen overlays (not implemented).

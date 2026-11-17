@@ -64,4 +64,4 @@ Download **OpenSrc-Windows-Portable-x64** or **OpenSrc-Windows-Installer-x64** f
 - No Google Play Store or Play Services. WHPX/Windows Hypervisor Platform is CPU virtualisation, not a custom GPU renderer; Android Emulator manages its own graphics backend.
 - The experimental raw-QEMU path still exists for developers, but arbitrary Android images are not promised to boot with it.
 
-OpenSrc has no login, cloud sync, or telemetry. Settings and runtime data stay local. See [runtime architecture](docs/architecture.md), [third-party notices](THIRD-PARTY-NOTICES.md), and [GPL-3.0-or-later](LICENSE).
+OpenSrc has no login, cloud sync, or telemetry. Settings and runtime data stay local. See [runtime architecture](docs/architecture.md), [build/verification log](docs/verification.md), [third-party notices](THIRD-PARTY-NOTICES.md), and [GPL-3.0-or-later](LICENSE).

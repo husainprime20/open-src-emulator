@@ -468,10 +468,10 @@ QWidget *MainWindow::makeControlsPage()
     headingStack->addWidget(label("Controls, your way.", "pageTitle"));
     headingStack->addWidget(label("Edit keyboard bindings and keep profiles local to this PC.", "subtitle"));
     heading->addLayout(headingStack); heading->addStretch();
-    auto *import = new QPushButton("⇧  Import profile"); import->setObjectName("secondaryButton");
-    auto *export = new QPushButton("↓  Export JSON"); export->setObjectName("primaryButton");
-    auto *add = new QPushButton("＋  Add control"); add->setObjectName("browseButton");
-    heading->addWidget(import); heading->addWidget(export); heading->addWidget(add);
+    auto *importButton = new QPushButton("⇧  Import profile"); importButton->setObjectName("secondaryButton");
+    auto *exportButton = new QPushButton("↓  Export JSON"); exportButton->setObjectName("primaryButton");
+    auto *addButton = new QPushButton("＋  Add control"); addButton->setObjectName("browseButton");
+    heading->addWidget(importButton); heading->addWidget(exportButton); heading->addWidget(addButton);
     layout->addLayout(heading);
     auto *notice = makePanel("noticePanel");
     auto *noticeRow = new QHBoxLayout(notice);
@@ -502,9 +502,9 @@ QWidget *MainWindow::makeControlsPage()
     layout->addWidget(editor, 1);
     for (const auto &entry : QList<QPair<QString, QString>>{{"Move", "W A S D"}, {"Aim & pan", "Mouse"}, {"Fire", "Left click"}, {"Jump", "Space"}, {"Crouch", "C"}, {"Inventory", "Tab"}})
         addMapping(entry.first, entry.second);
-    connect(import, &QPushButton::clicked, this, &MainWindow::importKeymap);
-    connect(export, &QPushButton::clicked, this, &MainWindow::exportKeymap);
-    connect(add, &QPushButton::clicked, this, [this] { addMapping("New action", "Unassigned"); saveKeymap(); });
+    connect(importButton, &QPushButton::clicked, this, &MainWindow::importKeymap);
+    connect(exportButton, &QPushButton::clicked, this, &MainWindow::exportKeymap);
+    connect(addButton, &QPushButton::clicked, this, [this] { addMapping("New action", "Unassigned"); saveKeymap(); });
     return page;
 }
 
@@ -807,7 +807,8 @@ void MainWindow::importKeymap()
         for (const QJsonValue &value : rows) {
             const QJsonObject row = value.toObject();
             QString action = row.value("action").toString();
-            if (action.isEmpty()) action = row.value("name").toString(row.value("label").toString());
+            if (action.isEmpty()) action = row.value("name").toString();
+            if (action.isEmpty()) action = row.value("label").toString();
             QString key = row.value("key").toString();
             if (key.isEmpty()) key = row.value("keys").toVariant().toString();
             if (key.isEmpty()) key = row.value("binding").toString();

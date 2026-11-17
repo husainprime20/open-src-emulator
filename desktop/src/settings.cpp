@@ -35,9 +35,12 @@ AppSettings AppSettings::load()
     settings.systemImage = json.value("systemImage").toString();
     settings.vendorImage = json.value("vendorImage").toString();
     settings.userdataImage = json.value("userdataImage").toString();
-    settings.theme = json.value("theme").toString(settings.theme);
-    settings.accent = json.value("accent").toString(settings.accent);
-    settings.gpuDevice = json.value("gpuDevice").toString(settings.gpuDevice);
+    const QString theme = json.value("theme").toString();
+    const QString accent = json.value("accent").toString();
+    const QString gpuDevice = json.value("gpuDevice").toString();
+    if (!theme.isEmpty()) settings.theme = theme;
+    if (!accent.isEmpty()) settings.accent = accent;
+    if (!gpuDevice.isEmpty()) settings.gpuDevice = gpuDevice;
     settings.cpuCores = json.value("cpuCores").toInt(settings.cpuCores);
     settings.memoryMiB = json.value("memoryMiB").toInt(settings.memoryMiB);
     settings.displayWidth = json.value("displayWidth").toInt(settings.displayWidth);

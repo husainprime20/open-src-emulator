@@ -1,35 +1,73 @@
-# OpenSrc runtime and graphics path
+# OpenSrc managed Android runtime
 
-## Current Windows-first path
+## Install layout
+
+The Inno Setup installer places the application on the system drive and creates the runtime subtree next to it:
 
 ```text
-ANDROID GUEST (AOSP 11 x86_64)              WINDOWS HOST
-┌───────────────────────────────┐            ┌──────────────────────────┐
-│ Android UI / media / apps     │            │ Windows GPU driver       │
-│ Skia / guest graphics driver │            │ QEMU SDL presentation    │
-│ VirtIO-GPU guest driver      │            │ QEMU VirtIO-GPU device   │
-└───────────────┬───────────────┘            └──────────────┬───────────┘
-                │ virtio-gpu PCI device                     │
-                └───────────────────────────────────────────┘
-
-QEMU guest CPU ───────── WHPX ───────── Windows Hypervisor Platform
+C:\OpenSrc                       {app}
+├─ OpenSrc.exe, Qt DLLs          installed by OpenSrc-Setup-<version>-x64.exe
+└─ Runtime                       created with users-modify ACLs
+   ├─ sdk\
+   │  ├─ cmdline-tools\latest\   downloaded from repository2-1.xml metadata
+   │  ├─ emulator\               emulator.exe
+   │  ├─ platform-tools\
+   │  ├─ system-images\android-35\google_apis\x86_64\
+   │  ├─ licenses\               accepted SDK licences
+   │  └─ openjdk\                private JRE 17 (Temurin)
+   ├─ avd\                       OpenSrc_Default_API_35.ini + .avd\config.ini
+   └─ android-user\              ANDROID_USER_HOME / ANDROID_PREFS_ROOT
 ```
 
-The current Qt shell starts QEMU with a Q35 machine, a selected VirtIO display device, and a separate QEMU SDL window. It supports a selected x86_64 kernel, optional initrd, system/vendor/userdata disks, USB keyboard/tablet, optional DirectSound audio, and opt-in user-mode NAT. The process is owned by the Qt app; the QEMU monitor on stdio is used for a clean quit. Settings and editable keymap profiles are atomically saved as JSON in `QStandardPaths::AppConfigLocation`.
+`PrivilegesRequired=lowest` with an explicit `DefaultDirName=C:\OpenSrc` lets a standard user install without a UAC prompt; the installer still elevates if the user selects a protected folder. Because program files keep their default ACLs, only the app-private `Runtime` subtree is made user-writable. That is what allows the multi-gigabyte Android download to happen later inside the app with no second elevation prompt.
 
-## Important graphics distinction
+The app resolves the same layout at runtime: `AppSettings::defaultAndroidRuntimeRoot()` prefers `<dir of OpenSrc.exe>\Runtime`, verifies it is writable, and otherwise falls back to the user's local application-data folder. A user-chosen folder is persisted as `runtimeRoot` in `settings.json`, and every other Android path (SDK root, emulator executable, AVD home, user home) is derived from it, so the installer, launcher, and readiness checks cannot drift apart.
 
-The attached reference diagram shows **Linux** `virtio-gpu-pci` + `virglrenderer` + host OpenGL. That Linux rendering stack is not automatically available on Windows. WHPX accelerates guest CPU virtualization; it does not accelerate or implement the GPU path. OpenSrc currently exposes QEMU VirtIO GPU device choices but does not bundle or configure virglrenderer, a Windows VirGL backend, GPU passthrough, or an accelerated Qt guest display. The Windows UI calls the PCI variant experimental and explicitly warns about this boundary.
+## Provisioning pipeline
 
-## Current integration boundaries
+```text
+Install Android runtime  (Android instance page)
+  ├─ 1  repository2-1.xml → cmdline-tools;latest Windows archive (+SHA-1)
+  │      download → verify → tar.exe extract → sdk\cmdline-tools\latest
+  ├─ 2  Adoptium GitHub release → Temurin 17 Windows x64 JRE (+SHA-256)
+  │      download → verify → tar.exe extract → sdk\openjdk
+  ├─ 3  cmd.exe /d /s /c sdkmanager.bat --sdk_root=… --licenses
+  │      (answers "y", only after the UI licence checkbox was accepted)
+  ├─ 4  cmd.exe /d /s /c sdkmanager.bat --install emulator platform-tools
+  │      "system-images;android-35;google_apis;x86_64"
+  ├─ 5  cmd.exe /d /s /c avdmanager.bat create avd --name OpenSrc_Default_API_35
+  │      --package … --device pixel_2   into sdk\..\avd
+  └─ 6  ready: emulator.exe + AVD config both present
+```
 
-- The desktop shell and QEMU process lifecycle are implemented in C++20 / Qt 6.
-- The user supplies QEMU and Android-compatible image files. Android images are not included. A generic AOSP `system.img` may not boot unchanged: kernel, ramdisk, partition layout, fstab, kernel drivers, and boot arguments must match the selected QEMU machine/devices. Use a known-good QEMU/ranchu-compatible AOSP 11 x86_64 output set.
-- The display currently opens in QEMU's own SDL window, not embedded in the Qt app.
-- The keymapping editor imports/exports normalized JSON or simple `action=key` text and persists locally. It does **not** yet inject mapped keys into the guest. Direct MSI App Player / BlueStacks conversion requires real, versioned sample files and is not claimed.
-- CPU and RAM allocation, display resolution, WHPX/TCG selection, GPU device, audio, and optional NAT affect the QEMU command. The displayed FPS target was deliberately omitted because this path does not yet implement a frame limiter.
-- Monitoring samples host CPU load and the QEMU process working set on Windows. It is not an input-to-photon latency benchmark.
+Implementation details that matter:
 
-## Privacy / access
+- **Batch files cannot be started by `CreateProcess`.** Qt's `QProcess` uses `CreateProcess`, so `sdkmanager.bat` is invoked through `cmd.exe /d /s /c` with every argument individually quoted. This is required for installs under paths containing spaces.
+- **The repository XML is not fully typed.** `repository2-1.xml` embeds the whole SDK licence text and its `checksum` elements do not reliably carry a `type` attribute, so the digest algorithm is inferred from the value length (40 → SHA-1, 64 → SHA-256). Package channels are read from `channelRef`; the stable channel (`channel-0`) is preferred.
+- **Java home must be the JRE root**, not `bin`; `JAVA_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME`, `ANDROID_USER_HOME`, and `ANDROID_PREFS_ROOT` are all pointed into `Runtime` so nothing leaks into `%USERPROFILE%\.android`.
+- **Resume and re-entrancy.** Startup inspects what already exists and skips completed phases. Cancelling or failing clears the active stage before killing the child process, and a guard prevents the killed process from re-entering the completion handler, so `finished()` is emitted exactly once.
+- **Progress is monotonic.** Each phase owns a slice of the bar (tools 2–16 %, Java 16–46 %, packages 48–96 %), and `sdkmanager`'s own `NN%` output is mapped into the package slice.
 
-No login, cloud sync, or telemetry is implemented. Configuration and keymap files stay under the current Windows user profile's Qt application config directory. Normal Windows file ACLs apply. Android guest privacy and network behavior are separate; NAT networking is off by default.
+## Launch and process ownership
+
+OpenSrc starts its privately installed `emulator.exe` with `-avd OpenSrc_Default_API_35 -memory <MiB>`, sets the SDK/AVD environment variables described above, and keeps the process handle so it can stop the device cleanly. The Android Emulator opens its own device window.
+
+## CI verification
+
+`.github/workflows/windows-build.yml` builds the MSVC x64 app, deploys Qt, builds the portable ZIP and the Inno Setup installer, then:
+
+1. silently installs the produced installer on the Windows runner,
+2. asserts `C:\OpenSrc\OpenSrc.exe` and `Runtime\{sdk,avd,android-user}` exist,
+3. writes a probe file into `Runtime` to prove it is writable without elevation,
+4. launches the installed `OpenSrc.exe` and fails the build if it exits during startup,
+5. removes the test install.
+
+This verifies packaging, install location, folder provisioning, and startup. It does **not** download the multi-gigabyte Android runtime on every CI run, so the end-to-end guest download and cold boot still need validation on a real machine.
+
+## Known boundaries
+
+- Device display is a separate Android Emulator window, not embedded in OpenSrc.
+- Keymap profile data is local, but guest key/touch injection and on-screen control overlays are not implemented.
+- Android Emulator owns its graphics backend; there is no custom Windows VirGL renderer.
+- No Google Play Store or Play Services; the system image supports APK sideloading.
+- A failed download leaves partial files in the temporary folder only; the SDK root keeps whatever completed so a retry can resume.

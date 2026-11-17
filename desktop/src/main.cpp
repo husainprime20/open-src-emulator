@@ -13,7 +13,11 @@ int main(int argc, char *argv[])
     if (QStyle *fusion = QStyleFactory::create("Fusion"))
         app.setStyle(fusion);
 
+    // The Windows installer launches OpenSrc with --setup-runtime right after
+    // installation, so a fresh install goes straight to Android setup.
     MainWindow window;
     window.show();
+    if (app.arguments().contains("--setup-runtime"))
+        window.openAndroidSetup();
     return app.exec();
 }

@@ -2,6 +2,7 @@
 
 #include "emulatorcontroller.h"
 #include "performancemonitor.h"
+#include "runtimeinstaller.h"
 #include "settings.h"
 
 #include <QMainWindow>
@@ -14,6 +15,7 @@
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QMap>
+#include <QProgressBar>
 
 class QFrame;
 
@@ -23,10 +25,15 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+public slots:
+    // Opens the Android instance page and points at the runtime setup controls.
+    void openAndroidSetup();
+
 private:
     AppSettings m_settings;
     EmulatorController m_emulator;
     PerformanceMonitor m_monitor;
+    RuntimeInstaller m_runtimeInstaller;
     QStackedWidget *m_pages = nullptr;
     QMap<QString, QPushButton *> m_navButtons;
     QMap<QString, QWidget *> m_pathEdits;
@@ -40,6 +47,15 @@ private:
     QPushButton *m_stopButton = nullptr;
     QComboBox *m_themeCombo = nullptr;
     QComboBox *m_gpuCombo = nullptr;
+    QComboBox *m_engineCombo = nullptr;
+    QComboBox *m_avdCombo = nullptr;
+    QFrame *m_sdkPanel = nullptr;
+    QCheckBox *m_licenseCheck = nullptr;
+    QProgressBar *m_runtimeProgress = nullptr;
+    QLabel *m_runtimeInstallStatus = nullptr;
+    QPushButton *m_installRuntimeButton = nullptr;
+    QPushButton *m_cancelRuntimeButton = nullptr;
+    QFrame *m_rawImagePanel = nullptr;
     QSpinBox *m_cpuSpin = nullptr;
     QSpinBox *m_memorySpin = nullptr;
     QSpinBox *m_widthSpin = nullptr;
@@ -48,6 +64,8 @@ private:
     QCheckBox *m_networkCheck = nullptr;
     QCheckBox *m_whpxCheck = nullptr;
     QLabel *m_configPathLabel = nullptr;
+    QLabel *m_runtimeFolderLabel = nullptr;
+    QLabel *m_heroBadge = nullptr;
     QLabel *m_breadcrumb = nullptr;
 
     QWidget *makeOverviewPage();
@@ -71,5 +89,9 @@ private:
     void saveKeymap();
     void addMapping(const QString &action, const QString &binding);
     void refreshReadiness();
+    void refreshAvds();
+    void applyManagedRuntimePaths();
+    void chooseRuntimeFolder();
+    void applyEngineUi();
     void selectPath(const QString &key, const QString &filter);
 };

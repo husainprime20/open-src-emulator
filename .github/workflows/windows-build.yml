@@ -82,6 +82,53 @@ jobs:
           & $iscc "/DAppVersion=$version" "/Oartifacts" "installer/OpenSrc.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
+      - name: Verify installer creates the C-drive runtime layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem artifacts/OpenSrc-Setup-*.exe | Select-Object -First 1
+          if (-not $setup) { throw 'Installer executable was not produced' }
+          $installDir = 'C:\OpenSrc'
+          $log = "$env:RUNNER_TEMP\install.log"
+          $process = Start-Process -FilePath $setup.FullName `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/LOG=$log" `
+            -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            throw "Installer exited with code $($process.ExitCode)"
+          }
+          foreach ($relative in 'OpenSrc.exe','Runtime','Runtime\sdk','Runtime\avd','Runtime\android-user') {
+            $path = Join-Path $installDir $relative
+            if (-not (Test-Path $path)) { throw "Installer did not create $path" }
+          }
+          # The runtime folder must be writable by the invoking user so the app can
+          # download Android components there without a later elevation prompt.
+          $probe = Join-Path $installDir 'Runtime\write-probe.txt'
+          Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+          Remove-Item $probe -Force
+          Write-Output "Verified self-contained layout under $installDir"
+
+      - name: Smoke-test installed app startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'C:\OpenSrc\OpenSrc.exe'
+          if (-not (Test-Path $exe)) { throw "Installed executable missing at $exe" }
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 12
+          $app.Refresh()
+          if ($app.HasExited) { throw "OpenSrc exited during startup with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          Write-Output 'OpenSrc started from the C: install without a missing-DLL failure'
+
+      - name: Clean up test install
+        shell: pwsh
+        run: |
+          # The uninstaller offers to keep the runtime; a silent uninstall skips
+          # that prompt, so remove the test folder directly to keep the run clean.
+          if (Test-Path 'C:\OpenSrc') { Remove-Item 'C:\OpenSrc' -Recurse -Force -ErrorAction SilentlyContinue }
+          Write-Output 'Test install removed'
+
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:

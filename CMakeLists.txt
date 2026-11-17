@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Network)
 
 qt_add_executable(OpenSrc WIN32
     desktop/src/main.cpp
@@ -20,9 +20,11 @@ qt_add_executable(OpenSrc WIN32
     desktop/src/emulatorcontroller.cpp
     desktop/src/performancemonitor.h
     desktop/src/performancemonitor.cpp
+    desktop/src/runtimeinstaller.h
+    desktop/src/runtimeinstaller.cpp
 )
 
-target_link_libraries(OpenSrc PRIVATE Qt6::Widgets)
+target_link_libraries(OpenSrc PRIVATE Qt6::Widgets Qt6::Network)
 target_include_directories(OpenSrc PRIVATE desktop/src)
 if(WIN32)
     target_link_libraries(OpenSrc PRIVATE psapi)
